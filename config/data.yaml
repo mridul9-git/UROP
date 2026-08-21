@@ -1,0 +1,81 @@
+# Stage 2 data configuration.
+# Every Stage 2 script reads this file. Changing a value here changes the whole
+# pipeline consistently — do not hard-code any of these in scripts.
+
+dataset:
+  name: CheXpert
+  release: CheXpert-v1.0-small          # downsampled JPEG release (~11 GB)
+  # Root directory that CONTAINS train.csv / valid.csv and the train/ valid/ folders.
+  root: E:/UROP/data/raw/CheXpert-v1.0-small
+  train_csv: train.csv
+  valid_csv: valid.csv
+
+# Official expert-annotated test set (500 patients / 668 images).
+# Labels: https://github.com/rajpurkarlab/cheXpert-test-set-labels
+# Images: CheXlocalize dataset on Stanford AIMI.
+test_set:
+  enabled: false                        # flip to true once acquired
+  root: E:/UROP/data/raw/chexpert-test
+  labels_csv: groundtruth.csv
+
+target:
+  column: Cardiomegaly
+  # Raw CheXpert encoding: 1.0 positive, 0.0 negative, -1.0 uncertain, blank = no mention.
+  uncertain_value: -1.0
+  # Uncertainty policy for the PRIMARY analysis. One of: u_zeros | u_ones | exclude
+  # Rationale: docs/dataset_analysis.md §3.
+  policy: u_zeros
+  # Policies re-run as reported sensitivity ablations.
+  ablation_policies: [u_ones, exclude]
+  # Blank/no-mention is treated as negative — matches Irvin et al. Table 1 accounting.
+  blank_is_negative: true
+
+view:
+  # Core experiment uses frontal only; AP and PA are COMBINED but AP/PA is kept
+  # as a metadata column for stratified reporting. docs/dataset_analysis.md §4.
+  frontal_lateral_column: Frontal/Lateral
+  projection_column: AP/PA
+  keep: [Frontal]
+  combine_ap_pa: true
+
+split:
+  unit: patient                         # HARD REQUIREMENT — never split by image
+  seed: 42
+  # Fractions apply to the OFFICIAL TRAINING PATIENTS only.
+  # The official test set is the held-out test set when test_set.enabled = true.
+  train_frac: 0.85
+  val_frac: 0.15
+  # Contingency split used only if the official test set cannot be obtained.
+  fallback:
+    train_frac: 0.70
+    val_frac: 0.15
+    test_frac: 0.15
+  # Patient-level stratification key: patient is positive if ANY of their kept
+  # frontal studies is Cardiomegaly-positive under the primary policy.
+  stratify: true
+  out_dir: E:/UROP/artifacts/stage2/splits
+
+preprocessing:
+  input_size: 320                       # native short side of the small release
+  resize_mode: direct                   # direct | aspect_pad  (see §10)
+  to_rgb: replicate                     # replicate grayscale channel 3x
+  normalize:
+    mean: [0.485, 0.456, 0.406]         # ImageNet — backbones are ImageNet-pretrained
+    std:  [0.229, 0.224, 0.225]
+
+subset:
+  # Reproducible patient-level stratified subsample for the core comparison.
+  # docs/dataset_analysis.md §15. Set enabled: false to use the full training pool.
+  #
+  # Sized for a 4-WEEK planning horizon (T1). This is the ONE value to raise if more
+  # time becomes available: 40000 -> 60000 -> 90000, or enabled: false for the full
+  # pool. Nothing else in the pipeline changes, and the seed keeps smaller subsets
+  # nested inside larger ones only if the seed is held fixed — it is.
+  enabled: true
+  target_frontal_images: 40000
+  seed: 42
+
+paths:
+  artifacts: E:/UROP/artifacts/stage2
+  figures: E:/UROP/figures/dataset      # Stage 2 figure home (worklet Step 18)
+  reports: E:/UROP/artifacts/stage2/reports
