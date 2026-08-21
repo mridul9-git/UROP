@@ -1007,56 +1007,119 @@ to the exact data it was trained on.
 | CPU | Intel i7-13650HX — **14 cores / 20 threads** |
 | RAM | **31.7 GiB** |
 | Storage | `E:` 301.2 GB free · `C:` 90.6 GB free · `F:` 102.2 GB free |
-| Python | **3.13.0** — PyTorch **not yet installed** |
+| Python | **3.13.0** |
+| PyTorch | **2.13.0+cu126**, torchvision 0.28.0+cu126 — installed 21/08/2026, CUDA available, compute capability **8.9** (Ada) |
+| Driver quirk | **CUDA System Memory Fallback is ON** (Windows driver default) — see §14.2.1 |
 
 **This resolves the "we do not have an A100" instruction concretely: 8 GB VRAM is the
 binding constraint on this project.** It is enough, but only with mixed precision and
 gradient accumulation.
 
-### 14.2 Architecture requirements
+### 14.2 Architecture requirements — **MEASURED**
 
 Parameter counts are **CONFIRMED** (torchvision reference implementations). VRAM and
-throughput figures are **estimates at 320 × 320 with AMP** — activations, not parameters,
-dominate memory, and the only trustworthy way to get these numbers is to measure them.
-`src/data/probe_vram.py` measures all of them on this exact card and writes
-`reports/vram_probe.json`.
+throughput are **CONFIRMED BY MEASUREMENT** on this exact card — no longer estimates.
 
-| Model | Params | Est. micro-batch @ 320, AMP, 8 GB | Est. throughput | Note |
-|---|---:|---:|---:|---|
-| ResNet152 | **60.2 M** | 16–24 | ~55–85 img/s | heaviest; deep residual stack |
-| DenseNet201 | **20.0 M** | 16–32 | ~70–110 img/s | few params but **dense concatenation makes it activation-hungry** — memory does not track parameter count |
-| EfficientNetV2-S | **21.5 M** | 24–32 | ~90–130 img/s | |
-| MobileNetV3-Large | **5.5 M** | 64–128 | ~250–400 img/s | trivially fits |
+**Measurement provenance:** `src/data/probe_vram.py`, 21/08/2026, torch 2.13.0+cu126,
+CUDA 12.6, RTX 4060 Laptop (8.00 GiB, 6.94 GiB free at probe start), 320 × 320, AMP on,
+real forward+backward+AdamW steps on synthetic batches, each model in its own subprocess.
+Raw data: `artifacts/stage2/reports/vram_probe.json`.
 
-**The critical experimental-control consequence:** these micro-batches differ by up to 8×.
-Batch size affects optimisation, so **allowing each model its maximum batch would make
-batch size a confounding variable in RQ1**.
+#### 14.2.1 The Windows system-memory-fallback trap — **CONFIRMED, and it invalidates naive probing**
 
-> **Requirement: fix one EFFECTIVE batch size (recommend 32) across all four models, and
-> reach it with gradient accumulation.** MobileNetV3 runs it in one step; ResNet152 runs
-> 16 × 2. Same effective batch, same optimisation regime, honest comparison.
+The first probe run reported ResNet152 surviving **batch 64**, which is impossible on 8 GB.
+It was not fitting — it was **spilling into host RAM**.
 
-### 14.3 Training cost estimate
+Recent NVIDIA Windows drivers enable **CUDA System Memory Fallback by default**. When VRAM
+is exhausted, allocations silently migrate to system RAM across PCIe instead of raising
+`OutOfMemoryError`. Training continues and produces correct results, ~10× slower.
 
-Per-epoch time on the full frontal training pool (~162,000 images after the 85/15 split),
-using the throughput estimates above:
+The measured signature is unambiguous:
 
-| Model | Est. min/epoch (full pool) | 10 epochs |
-|---|---:|---:|
-| ResNet152 | ~38 min | ~6.3 h |
-| DenseNet201 | ~30 min | ~5.0 h |
-| EfficientNetV2-S | ~25 min | ~4.2 h |
-| MobileNetV3-Large | ~9 min | ~1.5 h |
-| **Four baselines** | — | **~17 h** |
+| Model | Batch | Reserved | Throughput | vs peak |
+|---|---:|---:|---:|---:|
+| ResNet152 | 32 | 6.44 GiB | 81.0 img/s | 96% |
+| ResNet152 | **48** | **9.36 GiB** | **7.7 img/s** | **9%** |
+| DenseNet201 | 32 | 7.23 GiB | 86.7 img/s | 100% |
+| DenseNet201 | **48** | **10.56 GiB** | **7.3 img/s** | **8%** |
+| MobileNetV3-L | 128 | 6.96 GiB | 498.7 img/s | 94% |
+| MobileNetV3-L | **192** | **10.37 GiB** | **80.1 img/s** | **15%** |
 
-Add the hybrid, the XGBoost arm, Optuna (20 trials ≈ 10–20 h even with pruning), Grad-CAM
-and the ablations, and a **full-data** project lands around **50–70 GPU-hours**. On a
-laptop GPU that is roughly two weeks of overnight runs with no room for mistakes — and
-there are always mistakes.
+**Reserved memory exceeding the card's 8.00 GiB total is the proof** — 10.56 GiB cannot
+exist in 8 GiB of VRAM. Throughput collapsing to 8–15% at exactly those batches is the
+consequence.
 
-> **Verdict: the project is feasible on this hardware, but NOT at full data scale within a
-> short timeline. §15's subset strategy is what makes it fit — it is a requirement, not an
-> optimisation.**
+> **Any "grow the batch until it OOMs" probe is worthless on this machine.** It never OOMs;
+> it silently degrades. The probe therefore reports the largest **efficient** batch —
+> throughput within 90% of that model's peak — not the largest batch that avoids a crash.
+
+#### 14.2.2 Measured results
+
+| Model | Params | Max **efficient** batch | Reserved @ that batch | Throughput | Batch 16 | Batch 32 |
+|---|---:|---:|---:|---:|---:|---:|
+| ResNet152 | 60.2 M | **32** | 6.44 GiB | 81.0 img/s | 84.0 img/s @ 3.55 GiB | 81.0 img/s @ 6.44 GiB |
+| DenseNet201 | 20.0 M | **32** | **7.23 GiB** | 86.7 img/s | 61.0 img/s @ 3.80 GiB | 86.7 img/s @ 7.23 GiB |
+| EfficientNetV2-S | 21.5 M | **32** | 5.46 GiB | 144.0 img/s | 152.1 img/s @ 3.05 GiB | 144.0 img/s @ 5.46 GiB |
+| MobileNetV3-Large | 5.5 M | **128** | 6.96 GiB | 498.7 img/s | 486.1 img/s @ 1.00 GiB | 530.4 img/s @ 1.82 GiB |
+
+**The DenseNet prediction held.** §14.2's original note — "few parameters but dense
+concatenation makes it activation-hungry; memory does not track parameter count" — is
+confirmed: DenseNet201 has **one third** of ResNet152's parameters yet consumes **more**
+memory (7.23 vs 6.44 GiB at batch 32), the highest of all four.
+
+#### 14.2.3 The recommended configuration — **micro-batch 16, accumulation 2, all four models**
+
+> **REVISED from the pre-measurement plan.** The earlier text said micro-batches "differ by
+> up to 8×" and prescribed per-model accumulation. Measurement shows the *efficient*
+> batches are 32/32/32/128 — a 4× spread — and that a **single uniform configuration works
+> for every model**.
+
+| Model | Micro-batch | Accum steps | Effective batch | Reserved | Headroom vs 6.94 GiB free |
+|---|---:|---:|---:|---:|---:|
+| ResNet152 | 16 | 2 | 32 | 3.55 GiB | 3.39 GiB |
+| DenseNet201 | 16 | 2 | 32 | 3.80 GiB | 3.14 GiB |
+| EfficientNetV2-S | 16 | 2 | 32 | 3.05 GiB | 3.89 GiB |
+| MobileNetV3-Large | 16 | 2 | 32 | 1.00 GiB | 5.94 GiB |
+
+Three reasons this beats running each model at its own maximum:
+
+1. **DenseNet201 at micro-batch 32 reserves 7.23 GiB against 6.94 GiB free** — it is
+   *already marginally spilling*, and under real training (DataLoader workers, pinned
+   memory, fragmentation over thousands of steps) it would spill hard. Micro-batch 16
+   halves that to 3.80 GiB.
+2. **Throughput barely changes.** Between batch 16 and 32 the heavy models move by a few
+   percent, and ResNet152 and EfficientNetV2-S are actually *faster* at 16. The safety
+   margin is nearly free.
+3. **Identical configuration across all four models** is exactly what D020 demands — batch
+   size cannot confound RQ1 if it is literally the same number everywhere.
+
+### 14.3 Training cost — **MEASURED**
+
+Recomputed from measured throughput at the recommended micro-batch 16, 12 epochs:
+
+| Model | Measured img/s | T1 pool (~40,000/epoch) | Full pool (~162,000/epoch) |
+|---|---:|---:|---:|
+| ResNet152 | 84.0 | 7.9 min/epoch → **1.6 h** | 32 min/epoch → **6.4 h** |
+| DenseNet201 | 61.0 | 10.9 min/epoch → **2.2 h** | 44 min/epoch → **8.9 h** |
+| EfficientNetV2-S | 152.1 | 4.4 min/epoch → **0.9 h** | 18 min/epoch → **3.5 h** |
+| MobileNetV3-Large | 486.1 | 1.4 min/epoch → **0.3 h** | 5.6 min/epoch → **1.1 h** |
+| **Four baselines** | — | **~5.0 h** | **~20 h** |
+
+The pre-measurement estimate for the four baselines at T1 was ~5.1 h; **measured ~5.0 h**.
+The full-pool estimate was ~17 h at 10 epochs; **measured ~20 h at 12 epochs** — consistent.
+The §15.2 budget therefore stands without revision.
+
+**One caveat these numbers do not capture.** They are pure GPU compute on synthetic
+tensors. Real epochs also decode ~40,000 JPEGs, which is CPU work. With 20 logical cores
+this should keep the GPU fed for the heavy models, but **MobileNetV3 at 486 img/s may
+become data-loader-bound rather than GPU-bound**. That will show as low GPU utilisation
+during Stage 4 and is a tuning problem (`num_workers`, `persistent_workers`), not a
+capacity problem. It cannot be measured until real images exist.
+
+> **Verdict — now measured, not estimated: the project is feasible on this hardware.**
+> T1 four-baseline cost is **~5 GPU-hours**, comfortably inside the ~25–30 h budget for the
+> 4-week horizon. Full data scale (~20 h for baselines alone, ~50–70 h with Optuna and
+> ablations) remains outside it, so §15's subset strategy is still a requirement.
 
 ### 14.4 Training environments
 
@@ -1288,7 +1351,7 @@ attributable to a split and cannot change split membership.
 | `src/data/validate_images.py` | Steps 8, 9 — integrity + dimensions | done, tested |
 | `src/data/find_duplicates.py` | Step 7 — L1–L5 duplicate analysis | done, tested |
 | `src/data/make_splits.py` | Steps 5, 13, 15 — patient-level splits + manifest | done, tested |
-| `src/data/probe_vram.py` | Step 14 — empirical VRAM/throughput measurement | done (needs torch; data-free) |
+| `src/data/probe_vram.py` | Step 14 — empirical VRAM/throughput measurement | **done, executed 21/08/2026** → `reports/vram_probe.json` |
 | `src/data/plot_published_stats.py` | Step 18 — figures from CONFIRMED published values | **done, executed** |
 | `docs/data_pipeline.md` | Step 19 — the actual current data pipeline | done |
 | `docs/flow.md` | Step 19 — actual execution flow, existing code only | done |
@@ -1382,8 +1445,8 @@ appear as soon as it lands.
 | 14 | Preprocessing | ✅ specified and justified (§10) |
 | 15 | Augmentation | ✅ specified, with the flip question resolved (§11) |
 | 16 | Storage | ✅ ~40 GB working; 301 GB free on `E:` (§1.7) |
-| 17 | GPU/CPU requirements | ✅ measured: RTX 4060 8 GB / i7-13650HX / 31.7 GiB (§14) |
-| 18 | Computationally feasible? | ✅ **Yes** — ~25–30 GPU-hours at T1 within the 4-week horizon (§14, §15.2). **Not** at full data scale |
+| 17 | GPU/CPU requirements | ✅ measured: RTX 4060 8 GB / i7-13650HX / 31.7 GiB. **Per-model VRAM and throughput now MEASURED** (§14.2.2), not estimated |
+| 18 | Computationally feasible? | ✅ **Yes — confirmed by measurement.** Four baselines at T1 = **~5.0 GPU-hours**, inside the ~25–30 h budget (§14.3). **Not** at full data scale (~20 h for baselines alone) |
 
 ### What is needed to close Stage 2
 
@@ -1394,7 +1457,7 @@ appear as soon as it lands.
 | 3 | Run `analyze_metadata.py` and `make_splits.py` | me | all ⚠️ VERIFY rows above except 7/8/9 |
 | 4 | Approve the ~11 GB image download | you | Steps 7, 8, 9 |
 | 5 | Acquire the official test set (labels + CheXlocalize images) | you | the §13.2 split; can wait until Stage 3 |
-| 6 | `pip install torch` + run `probe_vram.py` | me | replaces §14.2 estimates with measurements |
+| ~~6~~ | ~~`pip install torch` + run `probe_vram.py`~~ | — | ✅ **DONE 21/08/2026** — §14.2/§14.3 now measured |
 
 Steps 3 and 6 need no approval and no images — 6 can run right now if you want the real
 batch-size numbers before committing to anything else.
@@ -1467,8 +1530,8 @@ principle but one input is still unverified · **UNKNOWN** = not decidable yet.
 | **Decision** | **320 × 320**. |
 | **Reason** | 320 is **exactly the native short side** of the small release — 224 would discard ~51% of the pixels we have, and 384 would upsample, adding zero information for ~44% more compute than 320. It is also what Irvin et al. used, aiding comparability. If VRAM proves tight, the fallback is **gradient accumulation at 320**, not a drop to 224: changing resolution changes the task for every model. |
 | **Evidence** | CheXpert datasheet (~390 × 320, aspect preserved); Irvin et al. training setup. |
-| **Confidence** | **PROVISIONAL** — sound on resolution grounds, but the 8 GB VRAM headroom is an **estimate** until `probe_vram.py` runs, and the exact dimension distribution is **VERIFY** until `validate_images.py` runs. |
-| **Date** | 16/08/2026 |
+| **Confidence** | **FINAL in substance** (upgraded from PROVISIONAL, 21/08/2026). The VRAM question is now **MEASURED, not estimated**: 320 × 320 fits all four models at micro-batch 16 using 1.00–3.80 GiB of 6.94 GiB free, with >3 GiB headroom on every model (§14.2.2). The one remaining unverified detail is the exact dimension *distribution*, still **VERIFY** until `validate_images.py` runs — but the datasheet already CONFIRMS the 320 px short side, so that check can only refine, not overturn, this decision. |
+| **Date** | 16/08/2026 · VRAM half resolved 21/08/2026 |
 
 ### D207 — Normalization
 
@@ -1507,8 +1570,8 @@ principle but one input is still unverified · **UNKNOWN** = not decidable yet.
 | **Decision** | Tiered. **T0** ~5,000 images (pipeline debugging, results never reported) · **T1 ~40,000 frontal training images** — the core comparison, all four baselines, fusion, XGBoost, Optuna and ablations · **T2** full pool, retraining only the winner and runner-up as a **stretch** scaling check. Validation and test are **never** subsampled. |
 | **Reason** | Sized to the confirmed **4-week planning horizon**: T1 costs ~25–30 GPU-hours on the available RTX 4060, versus ~50–70 at full scale, which would not fit. T1 preserves ~4,900 positives — the binding constraint on a binary task is the *minority* count, and that is well above data-starvation. Critically, it buys the **~10 hours of ablations** (D203, D207, D208, D209) that make the conclusions defensible; a larger subset that crowded them out would be a worse project. Every research question is an *internal* comparison under identical conditions, so absolute AUC matters less than comparability. |
 | **Evidence** | §14.3 cost model; §15.2 breakdown; subset nesting and prevalence preservation **CONFIRMED by test** (§15.4). |
-| **Confidence** | **PROVISIONAL** — T1 sizing depends on throughput **estimates** pending `probe_vram.py`, and on a planning horizon whose real deadline is not yet fixed. `subset.target_frontal_images` is the single value to change. |
-| **Date** | 16/08/2026 |
+| **Confidence** | **PROVISIONAL** — but for one reason only now (updated 21/08/2026). The throughput half is **MEASURED**: four baselines at T1 cost **~5.0 GPU-hours**, against a pre-measurement estimate of ~5.1 h (§14.3). The cost model is confirmed and T1 = 40k is comfortably affordable — in fact conservative, since the measured baseline cost consumes only ~20% of the ~25–30 h budget. What remains open is **non-technical**: the real UROP deadline is still unconfirmed (U17), and T1 sizing is pegged to a 4-week *planning horizon*, not a known deadline. `subset.target_frontal_images` remains the single value to change. **The sampling strategy has deliberately not been altered on the strength of this measurement.** |
+| **Date** | 16/08/2026 · throughput half resolved 21/08/2026 |
 
 ### Supplementary detailed log
 
@@ -1570,14 +1633,17 @@ Nothing here blocks Stage 3 *planning*; items marked **BLOCKING** block Stage 3
 If U12 or U13 fail, the **fallback 70/15/15 carve** applies (§13.3) and must be stated
 prominently in the report, since it materially weakens the ground truth.
 
-### 21.4 Resolved by installing `torch` — non-blocking
+### 21.4 ~~Resolved by installing `torch`~~ — **RESOLVED 21/08/2026**
 
-| # | Question | Certainty now |
+| # | Question | Status |
 |---:|---|---|
-| U15 | Real max micro-batch per architecture at 320 × 320 on 8 GB | **estimate only** (§14.2) |
-| U16 | Real throughput, hence the true T1 cost | **estimate only** (§14.3) |
+| U15 | Real max micro-batch per architecture at 320 × 320 on 8 GB | ✅ **MEASURED** — max efficient batch 32/32/32/128; recommended uniform micro-batch **16 × 2 accumulation** (§14.2.2–14.2.3) |
+| U16 | Real throughput, hence the true T1 cost | ✅ **MEASURED** — 84.0 / 61.0 / 152.1 / 486.1 img/s; four baselines at T1 = **~5.0 GPU-hours** (§14.3) |
+| U25 | *(new, found by the probe)* Does Windows system-memory fallback distort batch sizing? | ✅ **CONFIRMED PRESENT** — reserved memory reaching 10.56 GiB on an 8.00 GiB card, throughput collapsing to 8–15%. Handled: the probe reports max *efficient* batch, and the recommended config sits >3 GiB clear of the spill threshold (§14.2.1) |
+| U26 | *(new, deferred)* Will the JPEG data loader bottleneck MobileNetV3 at ~486 img/s? | **UNKNOWN** — measured throughput is pure GPU compute on synthetic tensors. Cannot be tested until real images exist; a `num_workers` tuning problem, not a capacity problem (§14.3) |
 
-`probe_vram.py` needs no dataset and can run at any time.
+`probe_vram.py` needed no dataset and has run. Raw data:
+`artifacts/stage2/reports/vram_probe.json`.
 
 ### 21.5 Needs a human answer — non-blocking
 
@@ -1614,21 +1680,24 @@ prominently in the report, since it materially weakens the ground truth.
 | 9 | **What augmentation?** | **Train split only.** Rotation ±10°, isotropic zoom 0.9–1.0, translation ±5% with padding, brightness ±10%, contrast ±10%. **No horizontal flip.** No anisotropic aspect jitter — it changes the cardiothoracic ratio, i.e. the label. No shear, elastic, cutout, MixUp or CutMix. No TTA. |
 | 10 | **How is imbalance handled?** | **One** strategy: `pos_weight` in `BCEWithLogitsLoss`, computed from **train only**. At ~1:7 the imbalance is moderate; focal loss and resampling would add confounds without justification. Threshold selected on validation, frozen, applied once to test. **Report PR-AUC with its 0.123 baseline alongside ROC-AUC; never accuracy alone.** |
 | 11 | **Full dataset or subset?** | **Subset — T1 ~40,000 frontal training images**, patient-level stratified, seed 42, for the core comparison. Full pool (T2) only as a stretch scaling check on the top two models. **Validation and test are never subsampled.** Raising `subset.target_frontal_images` is the single change if more time appears; subsets are nested supersets, **CONFIRMED by test**. |
-| 12 | **What hardware?** | **Primary: the local RTX 4060 Laptop (8 GB), i7-13650HX, 31.7 GiB RAM, 301 GB free on `E:`** — all measured. 8 GB is the binding constraint: requires AMP and **a fixed effective batch size of 32 via gradient accumulation**, without which per-model batch differences (up to 8×) would confound RQ1. Local training also keeps the data on-machine, satisfying the RUA's no-redistribution clause. **Backup: Kaggle Notebooks** (16 GB P100, ~30 h/week) — subject to U19. |
-| 13 | **What is still unknown?** | 24 items catalogued in §21. The blocking ones: seven metadata facts needing the ~30 MB CSV (U1–U7), four data-quality facts needing the images (U8–U11), and the test-set join (U12–U14). Non-blocking: real VRAM/throughput (U15–U16), and four human answers (U17–U20) — the **actual deadline** being the most consequential. |
+| 12 | **What hardware?** | **Primary: the local RTX 4060 Laptop (8 GB), i7-13650HX, 31.7 GiB RAM, 301 GB free on `E:`.** All four models **measured** at 320 × 320 with AMP: run every one at **micro-batch 16 with 2 gradient-accumulation steps** (effective batch 32, identical across models per D020), using 1.00–3.80 GiB and leaving >3 GiB headroom. Measured throughput 84.0 / 61.0 / 152.1 / 486.1 img/s. **Critical machine-specific caveat:** Windows CUDA System Memory Fallback is ON, so exceeding VRAM does not error — it silently spills to host RAM at ~10× slowdown (§14.2.1). The recommended config sits well clear of that threshold. Local training also keeps data on-machine, satisfying the RUA. **Backup: Kaggle Notebooks** (16 GB P100, ~30 h/week) — subject to U19. |
+| 13 | **What is still unknown?** | 26 items catalogued in §21. **Blocking:** seven metadata facts needing the ~30 MB CSV (U1–U7), four data-quality facts needing the images (U8–U11), and the test-set join (U12–U14). **Resolved 21/08/2026:** VRAM and throughput (U15–U16), plus a newly found and handled driver quirk (U25). **Non-blocking and open:** the data-loader bottleneck question (U26) and four human answers (U17–U20) — the **actual deadline** (U17) being the most consequential, since it is now the *only* thing keeping D210 provisional. |
 | 14 | **Ready for Stage 3?** | **Methodologically yes; operationally no.** Every design decision is made, justified and recorded; the pipeline is implemented and verified end-to-end on a fixture. But **no CheXpert file has been downloaded**, so no number in §6.3 is measured, no split exists, and D205/D206/D209/D210 remain PROVISIONAL. **Stage 2 closes when the metadata CSV lands and `analyze_metadata.py` + `make_splits.py` have run** — roughly an hour of work once the download is done. Stage 3 must not begin before that. |
 
 ### Stage 2 status
 
 > **CONDITIONALLY COMPLETE — pending data acquisition.**
 >
-> All analysis, decisions and code are done. Of the ten formal decisions:
-> **three are FINAL outright** (D202, D203, D208); **three are FINAL in substance with one
+> All analysis, decisions and code are done. Of the ten formal decisions (updated
+> 21/08/2026 after the VRAM probe):
+> **three are FINAL outright** (D202, D203, D208); **four are FINAL in substance with one
 > unverified detail each** (D201 test-set acquisition, D204 the `AP/PA` value set,
-> D207 `direct` vs `aspect_pad`); and **four are PROVISIONAL pending measurement**
-> (D205, D206, D209, D210). Every provisional item names the script that will settle it.
-> Stage 2 cannot be declared closed on published values alone, and claiming otherwise
-> would be exactly the kind of unverified assertion this document is structured to prevent.
+> D207 `direct` vs `aspect_pad`, and **D206 — upgraded, its VRAM half now measured**);
+> and **three remain PROVISIONAL** (D205, D209 pending the metadata CSV; D210 pending
+> only the real deadline, its throughput half now measured). Every provisional item names
+> the script or the answer that will settle it. Stage 2 cannot be declared closed on
+> published values alone, and claiming otherwise would be exactly the kind of unverified
+> assertion this document is structured to prevent.
 
 ---
 

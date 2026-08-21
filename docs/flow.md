@@ -18,7 +18,7 @@ with its own `main()` guarded by `if __name__ == "__main__":`.
 | Entry point | Purpose | Needs CSV? | Needs images? | Runs today? |
 |---|---|---|---|---|
 | `src/data/plot_published_stats.py` | Step 18 figures from published values | no | no | ✅ **yes — has run** |
-| `src/data/probe_vram.py` | Step 14 VRAM/throughput measurement | no | no | ⚠️ needs `torch` |
+| `src/data/probe_vram.py` | Step 14 VRAM/throughput measurement | no | no | ✅ **yes — has run** (21/08/2026) |
 | `src/data/analyze_metadata.py` | Steps 3, 4, 6, 12 tables + figures | **yes** | no | ⛔ blocked on CSV |
 | `src/data/make_splits.py` | Steps 5, 13, 15 splits + manifest | **yes** | no | ⛔ blocked on CSV |
 | `src/data/validate_images.py` | Steps 8, 9 integrity + dimensions | yes | **yes** | ⛔ blocked on images |
@@ -176,20 +176,43 @@ main()
 | `sha1_of` | `(root, rel) -> (rel, hexdigest)`; returns `""` on failure |
 | `dhash` | `(root, rel, size=8) -> (rel, bitstring)` — 64-bit difference hash |
 
-### 3.6 `probe_vram.py` — ⚠️ needs `torch`, no data
+### 3.6 `probe_vram.py` — **CONFIRMED, has run** (no data needed)
 
 ```text
-main()
+main()                                    # PARENT
   ├─ import torch; exit cleanly if missing or CUDA unavailable
-  ├─ for name in MODELS:            # resnet152, densenet201, efficientnet_v2_s, mobilenet_v3_large
-  │      batch = 4; while batch <= max_batch: try_batch(...) else break; batch *= 2
-  └─ writes reports/vram_probe.json
+  ├─ report GPU, torch/CUDA versions, free-vs-total VRAM
+  ├─ for name in MODELS:
+  │      subprocess: python probe_vram.py --model NAME --json
+  │      (own CUDA context per model — a hard OOM can wedge a context)
+  │      parse the child's ---JSON--- payload
+  └─ writes reports/vram_probe.json + prints the summary table
+
+run_child(name, ...)                      # CHILD
+  └─ probe_model() → sweep CANDIDATES ladder, recording throughput at every batch
 ```
 
 | Function | Signature | Notes |
 |---|---|---|
 | `build` | `(name) -> nn.Module` | `weights=None` — irrelevant for a memory probe |
-| `try_batch` | `(name, batch, size, amp, steps=4) -> dict \| None` | returns `None` on `OutOfMemoryError`; excludes step 0 from timing (cudnn autotune); `gc.collect()` + `empty_cache()` in `finally` |
+| `_is_oom` | `(exc) -> bool` | matches the OOM **message**, because torch ≤ 2.x raised `torch.cuda.OutOfMemoryError` while 2.13 surfaces `torch.AcceleratorError` |
+| `try_batch` | `(name, batch, size, amp, steps=6) -> dict \| None` | real fwd+bwd+AdamW; returns `None` on OOM; skips steps 0–1 from timing; reports **both** `alloc_gib` and `reserved_gib`; `del` locals **inside** `finally` before `gc.collect()` |
+| `probe_model` | `(name, size, amp, cap) -> dict` | sweeps `CANDIDATES`; returns max **efficient** batch, not max non-crashing batch |
+| `run_child` | `(name, size, amp, cap) -> None` | emits JSON after a `---JSON---` marker |
+
+Constants: `EFFECTIVE_BATCH = 32`, `CANDIDATES`, `EFFICIENCY_FLOOR = 0.90`,
+`COLLAPSE_FLOOR = 0.70`.
+
+**Why it is not a simple grow-until-OOM loop — CONFIRMED by measurement.** Windows CUDA
+System Memory Fallback (driver default, ON) spills to host RAM instead of raising OOM, so
+a naive probe reports an impossible batch that trains ~10× slower. Detection is by
+throughput collapse plus `reserved_gib` exceeding physical VRAM. See
+`dataset_analysis.md` §14.2.1.
+
+**Three bugs in the first version, all found by running it:** cleanup ran outside the
+`try` block; only `torch.cuda.OutOfMemoryError` was caught (torch 2.13 raises
+`AcceleratorError`); and `gc.collect()` in `finally` could not free GPU tensors because
+the frame's locals were still bound.
 
 ---
 
@@ -225,6 +248,7 @@ real JPEGs, realistic label marginals; generator in the session scratchpad, not 
 | `plot_published_stats.py` | pass — 5 figures, on real published values |
 | Subset nesting (200 ⊂ 400 ⊂ 600) | pass |
 | `compact_formatter` at sub-1k scale | pass (regression: previously rendered "0k") |
+| `probe_vram.py` on the real RTX 4060 (21/08/2026) | pass — 4 models measured, `vram_probe.json` written |
 
 **Two real bugs were found and fixed by this testing**, both recorded in
 `docs/data_pipeline.md` §2.6 and §2.7: the `StratifiedGroupKFold` fraction error, and the

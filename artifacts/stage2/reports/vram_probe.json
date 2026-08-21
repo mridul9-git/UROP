@@ -1,0 +1,338 @@
+{
+  "measured_utc": "2026-08-21T05:52:47+00:00",
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "total_gib": 8.0,
+  "free_at_start_gib": 6.94,
+  "torch": "2.13.0+cu126",
+  "cuda": "12.6",
+  "input_size": 320,
+  "amp": true,
+  "effective_batch_target": 32,
+  "efficiency_floor": 0.9,
+  "results": {
+    "resnet152": {
+      "max_batch_tested_ok": 48,
+      "oom_at": null,
+      "max_efficient_batch": 32,
+      "at_max_efficient": {
+        "batch": 32,
+        "alloc_gib": 5.95,
+        "reserved_gib": 6.44,
+        "sec_per_step": 0.395,
+        "img_per_sec": 81.0
+      },
+      "planned_micro_batch": 32,
+      "accum_steps": 1,
+      "at_planned": {
+        "batch": 32,
+        "alloc_gib": 5.95,
+        "reserved_gib": 6.44,
+        "sec_per_step": 0.395,
+        "img_per_sec": 81.0
+      },
+      "peak_img_per_sec": 84.0,
+      "system_memory_spill_detected": true,
+      "trials": [
+        {
+          "batch": 4,
+          "alloc_gib": 1.08,
+          "reserved_gib": 1.15,
+          "sec_per_step": 0.0557,
+          "img_per_sec": 71.8
+        },
+        {
+          "batch": 8,
+          "alloc_gib": 1.77,
+          "reserved_gib": 1.96,
+          "sec_per_step": 0.0958,
+          "img_per_sec": 83.5
+        },
+        {
+          "batch": 12,
+          "alloc_gib": 2.45,
+          "reserved_gib": 2.78,
+          "sec_per_step": 0.1445,
+          "img_per_sec": 83.0
+        },
+        {
+          "batch": 16,
+          "alloc_gib": 3.15,
+          "reserved_gib": 3.55,
+          "sec_per_step": 0.1905,
+          "img_per_sec": 84.0
+        },
+        {
+          "batch": 24,
+          "alloc_gib": 4.51,
+          "reserved_gib": 4.95,
+          "sec_per_step": 0.2969,
+          "img_per_sec": 80.8
+        },
+        {
+          "batch": 32,
+          "alloc_gib": 5.95,
+          "reserved_gib": 6.44,
+          "sec_per_step": 0.395,
+          "img_per_sec": 81.0
+        },
+        {
+          "batch": 48,
+          "alloc_gib": 8.68,
+          "reserved_gib": 9.36,
+          "sec_per_step": 6.2375,
+          "img_per_sec": 7.7
+        }
+      ]
+    },
+    "densenet201": {
+      "max_batch_tested_ok": 48,
+      "oom_at": null,
+      "max_efficient_batch": 32,
+      "at_max_efficient": {
+        "batch": 32,
+        "alloc_gib": 6.6,
+        "reserved_gib": 7.23,
+        "sec_per_step": 0.3689,
+        "img_per_sec": 86.7
+      },
+      "planned_micro_batch": 32,
+      "accum_steps": 1,
+      "at_planned": {
+        "batch": 32,
+        "alloc_gib": 6.6,
+        "reserved_gib": 7.23,
+        "sec_per_step": 0.3689,
+        "img_per_sec": 86.7
+      },
+      "peak_img_per_sec": 86.7,
+      "system_memory_spill_detected": true,
+      "trials": [
+        {
+          "batch": 4,
+          "alloc_gib": 1.09,
+          "reserved_gib": 1.13,
+          "sec_per_step": 0.2693,
+          "img_per_sec": 14.9
+        },
+        {
+          "batch": 8,
+          "alloc_gib": 1.88,
+          "reserved_gib": 2.02,
+          "sec_per_step": 0.2303,
+          "img_per_sec": 34.7
+        },
+        {
+          "batch": 12,
+          "alloc_gib": 2.68,
+          "reserved_gib": 2.97,
+          "sec_per_step": 0.2804,
+          "img_per_sec": 42.8
+        },
+        {
+          "batch": 16,
+          "alloc_gib": 3.48,
+          "reserved_gib": 3.8,
+          "sec_per_step": 0.2623,
+          "img_per_sec": 61.0
+        },
+        {
+          "batch": 24,
+          "alloc_gib": 5.03,
+          "reserved_gib": 5.56,
+          "sec_per_step": 0.418,
+          "img_per_sec": 57.4
+        },
+        {
+          "batch": 32,
+          "alloc_gib": 6.6,
+          "reserved_gib": 7.23,
+          "sec_per_step": 0.3689,
+          "img_per_sec": 86.7
+        },
+        {
+          "batch": 48,
+          "alloc_gib": 9.76,
+          "reserved_gib": 10.56,
+          "sec_per_step": 6.5845,
+          "img_per_sec": 7.3
+        }
+      ]
+    },
+    "efficientnet_v2_s": {
+      "max_batch_tested_ok": 48,
+      "oom_at": null,
+      "max_efficient_batch": 32,
+      "at_max_efficient": {
+        "batch": 32,
+        "alloc_gib": 5.13,
+        "reserved_gib": 5.46,
+        "sec_per_step": 0.2223,
+        "img_per_sec": 144.0
+      },
+      "planned_micro_batch": 32,
+      "accum_steps": 1,
+      "at_planned": {
+        "batch": 32,
+        "alloc_gib": 5.13,
+        "reserved_gib": 5.46,
+        "sec_per_step": 0.2223,
+        "img_per_sec": 144.0
+      },
+      "peak_img_per_sec": 157.9,
+      "system_memory_spill_detected": true,
+      "trials": [
+        {
+          "batch": 4,
+          "alloc_gib": 0.9,
+          "reserved_gib": 0.91,
+          "sec_per_step": 0.0628,
+          "img_per_sec": 63.7
+        },
+        {
+          "batch": 8,
+          "alloc_gib": 1.5,
+          "reserved_gib": 1.6,
+          "sec_per_step": 0.0745,
+          "img_per_sec": 107.4
+        },
+        {
+          "batch": 12,
+          "alloc_gib": 2.1,
+          "reserved_gib": 2.27,
+          "sec_per_step": 0.0834,
+          "img_per_sec": 143.8
+        },
+        {
+          "batch": 16,
+          "alloc_gib": 2.7,
+          "reserved_gib": 3.05,
+          "sec_per_step": 0.1052,
+          "img_per_sec": 152.1
+        },
+        {
+          "batch": 24,
+          "alloc_gib": 3.87,
+          "reserved_gib": 4.45,
+          "sec_per_step": 0.152,
+          "img_per_sec": 157.9
+        },
+        {
+          "batch": 32,
+          "alloc_gib": 5.13,
+          "reserved_gib": 5.46,
+          "sec_per_step": 0.2223,
+          "img_per_sec": 144.0
+        },
+        {
+          "batch": 48,
+          "alloc_gib": 7.45,
+          "reserved_gib": 8.15,
+          "sec_per_step": 1.9218,
+          "img_per_sec": 25.0
+        }
+      ]
+    },
+    "mobilenet_v3_large": {
+      "max_batch_tested_ok": 192,
+      "oom_at": null,
+      "max_efficient_batch": 128,
+      "at_max_efficient": {
+        "batch": 128,
+        "alloc_gib": 5.67,
+        "reserved_gib": 6.96,
+        "sec_per_step": 0.2567,
+        "img_per_sec": 498.7
+      },
+      "planned_micro_batch": 32,
+      "accum_steps": 1,
+      "at_planned": {
+        "batch": 32,
+        "alloc_gib": 1.5,
+        "reserved_gib": 1.82,
+        "sec_per_step": 0.0603,
+        "img_per_sec": 530.4
+      },
+      "peak_img_per_sec": 530.4,
+      "system_memory_spill_detected": true,
+      "trials": [
+        {
+          "batch": 4,
+          "alloc_gib": 0.27,
+          "reserved_gib": 0.3,
+          "sec_per_step": 0.0281,
+          "img_per_sec": 142.6
+        },
+        {
+          "batch": 8,
+          "alloc_gib": 0.45,
+          "reserved_gib": 0.53,
+          "sec_per_step": 0.032,
+          "img_per_sec": 250.2
+        },
+        {
+          "batch": 12,
+          "alloc_gib": 0.63,
+          "reserved_gib": 0.76,
+          "sec_per_step": 0.0282,
+          "img_per_sec": 424.9
+        },
+        {
+          "batch": 16,
+          "alloc_gib": 0.8,
+          "reserved_gib": 1.0,
+          "sec_per_step": 0.0329,
+          "img_per_sec": 486.1
+        },
+        {
+          "batch": 24,
+          "alloc_gib": 1.15,
+          "reserved_gib": 1.48,
+          "sec_per_step": 0.0456,
+          "img_per_sec": 526.7
+        },
+        {
+          "batch": 32,
+          "alloc_gib": 1.5,
+          "reserved_gib": 1.82,
+          "sec_per_step": 0.0603,
+          "img_per_sec": 530.4
+        },
+        {
+          "batch": 48,
+          "alloc_gib": 2.19,
+          "reserved_gib": 2.71,
+          "sec_per_step": 0.1107,
+          "img_per_sec": 433.7
+        },
+        {
+          "batch": 64,
+          "alloc_gib": 2.88,
+          "reserved_gib": 3.56,
+          "sec_per_step": 0.1245,
+          "img_per_sec": 514.2
+        },
+        {
+          "batch": 96,
+          "alloc_gib": 4.31,
+          "reserved_gib": 5.3,
+          "sec_per_step": 0.19,
+          "img_per_sec": 505.4
+        },
+        {
+          "batch": 128,
+          "alloc_gib": 5.67,
+          "reserved_gib": 6.96,
+          "sec_per_step": 0.2567,
+          "img_per_sec": 498.7
+        },
+        {
+          "batch": 192,
+          "alloc_gib": 8.45,
+          "reserved_gib": 10.37,
+          "sec_per_step": 2.3981,
+          "img_per_sec": 80.1
+        }
+      ]
+    }
+  }
+}
