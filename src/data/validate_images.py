@@ -43,6 +43,8 @@ from chexpert_metadata import (  # noqa: E402
     apply_plot_style,
     compact_formatter,
     ensure_dirs,
+    resolve_image_path,
+    verify_image_root,
     load_config,
     load_split_csv,
     select_frontal,
@@ -53,7 +55,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = False
 warnings.simplefilter("error", Image.DecompressionBombWarning)
 
 
-def check_one(rel_path: str, root: Path, full_decode: bool) -> dict:
+def check_one(rel_path: str, cfg: dict, full_decode: bool) -> dict:
     """Return a record describing one image. Never raises; never writes."""
     rec = {
         "Path": rel_path,
@@ -66,9 +68,7 @@ def check_one(rel_path: str, root: Path, full_decode: bool) -> dict:
         "pmax": np.nan,
         "pmean": np.nan,
     }
-    # CheXpert Path values already include the release directory as their first
-    # segment, so resolve against the release root's PARENT.
-    fpath = (root.parent / rel_path) if not (root / rel_path).exists() else (root / rel_path)
+    fpath = resolve_image_path(cfg, rel_path)
 
     if not fpath.exists():
         rec["status"] = "missing"
@@ -109,7 +109,11 @@ def main() -> None:
     cfg = load_config()
     ensure_dirs(cfg)
     apply_plot_style()
-    root = Path(cfg["dataset"]["root"])
+    # Fail fast on a missing/mis-shaped image release: without this every one of
+    # ~191k rows would be recorded as 'missing', which reads like a corrupt dataset
+    # rather than an un-downloaded one.
+    release = verify_image_root(cfg)
+    print(f"[info] image release: {release}")
     rep_dir = Path(cfg["paths"]["reports"])
     fig_dir = Path(cfg["paths"]["figures"])
 
@@ -122,7 +126,7 @@ def main() -> None:
 
     records = []
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = [pool.submit(check_one, p, root, not args.dims_only) for p in paths]
+        futures = [pool.submit(check_one, p, cfg, not args.dims_only) for p in paths]
         for fut in tqdm(as_completed(futures), total=len(futures), unit="img"):
             records.append(fut.result())
 

@@ -1,0 +1,91 @@
+{
+  "created_utc": "2026-08-21T17:21:06+00:00",
+  "release": "CheXpert-v1.0-small",
+  "target": "Cardiomegaly",
+  "uncertainty_policy": "u_zeros",
+  "blank_is_negative": true,
+  "views_kept": [
+    "Frontal"
+  ],
+  "ap_pa_combined": true,
+  "split_unit": "patient",
+  "seed": 42,
+  "stratified_by": "patient-level any-positive Cardiomegaly",
+  "mode": "fallback-carved-test",
+  "fractions": {
+    "train_frac": 0.7,
+    "val_frac": 0.15,
+    "test_frac": 0.15
+  },
+  "subset": {
+    "enabled": true,
+    "seed": 42,
+    "target_frontal_images": 40000,
+    "train_images_before": 132764,
+    "train_images_after": 40002,
+    "note": "patient-level stratified subsample of TRAIN only; val and test are never subsampled"
+  },
+  "summary": [
+    {
+      "split": "train",
+      "patients": 13659,
+      "studies": 39285,
+      "images": 40002,
+      "positive": 5520,
+      "negative": 34482,
+      "prevalence": 0.13799,
+      "projection_counts": {
+        "AP": 33912,
+        "PA": 6086,
+        "LL": 4
+      }
+    },
+    {
+      "split": "val",
+      "patients": 9680,
+      "studies": 28862,
+      "images": 29380,
+      "positive": 4011,
+      "negative": 25369,
+      "prevalence": 0.13652,
+      "projection_counts": {
+        "AP": 24871,
+        "PA": 4507,
+        "LL": 2
+      }
+    },
+    {
+      "split": "test",
+      "patients": 9682,
+      "studies": 28377,
+      "images": 28883,
+      "positive": 3973,
+      "negative": 24910,
+      "prevalence": 0.13755,
+      "projection_counts": {
+        "AP": 24585,
+        "PA": 4295,
+        "LL": 2,
+        "RL": 1
+      }
+    }
+  ],
+  "files": {
+    "train": {
+      "path": "E:\\UROP\\artifacts\\stage2\\splits\\train.csv",
+      "rows": 40002,
+      "sha1": "c0135c5a7bc9cb0fa0a202e8a1247072721bbf26"
+    },
+    "val": {
+      "path": "E:\\UROP\\artifacts\\stage2\\splits\\val.csv",
+      "rows": 29380,
+      "sha1": "ccc88d156a8efbc7671173a1655fa02036bf9f59"
+    },
+    "test": {
+      "path": "E:\\UROP\\artifacts\\stage2\\splits\\test.csv",
+      "rows": 28883,
+      "sha1": "ae89aff10ae5db6f3160f083ac7201a9424af37e"
+    }
+  },
+  "pos_weight_from_train": 6.246739
+}

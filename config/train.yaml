@@ -1,0 +1,157 @@
+# Stage 3 training configuration.
+#
+# This file is the SINGLE source of truth for every training hyperparameter.
+# Nothing here may be hard-coded in Python. Stage 2 data parameters live in
+# config/data.yaml and are NOT duplicated here — this file references that one.
+#
+# Provenance of every non-obvious value is cited to docs/dataset_analysis.md so a
+# future reader can tell a measured value from a chosen one.
+
+# --- what this run is ----------------------------------------------------------
+experiment:
+  # Free-text tag. The run directory is <output_root>/<name>__<model>__seed<seed>__<utc>.
+  name: baseline
+  seed: 42                              # split seed is 42 (config/data.yaml); reused for training
+  output_root: E:/UROP/artifacts/stage3/runs
+  # FIXTURE/DRY-RUN marker. When true every log line, the manifest and the run
+  # directory name are stamped so fixture output can never be mistaken for a real
+  # experiment. Set by --fixture; do not set it by hand for a real run.
+  fixture: false
+
+# --- data ----------------------------------------------------------------------
+data:
+  # Stage 2 config, read for preprocessing + the centralized image resolver.
+  data_config: E:/UROP/config/data.yaml
+  splits_dir: E:/UROP/artifacts/stage2/splits
+  train_csv: train.csv
+  val_csv: val.csv
+  test_csv: test.csv
+  # Audit trail written by make_splits.py. Used to source pos_weight and to stamp
+  # split identity (sha1 of each split CSV) into the run manifest.
+  split_manifest: split_manifest.json
+
+  # Rows whose image fails integrity checking (validate_images.py). Excluded rows
+  # are SKIPPED, never deleted — docs/dataset_analysis.md §8.4. Missing file is
+  # tolerated (the check has not run yet); a present file is applied.
+  exclusions_csv: E:/UROP/artifacts/stage2/reports/excluded_images.csv
+
+  # Loud-failure policy for images referenced by a split CSV but absent on disk.
+  # 'error'  — raise on the first missing image (REQUIRED for real experiments)
+  # 'report' — collect every missing path, then raise with the full list
+  # Silently dropping them is not an option: it would change the denominator of
+  # every metric without appearing anywhere. Invariant: no silent discards.
+  on_missing_image: error
+
+  num_workers: 8                        # docs/dataset_analysis.md §16
+  persistent_workers: true
+  pin_memory: true
+  prefetch_factor: 4
+
+# --- preprocessing -------------------------------------------------------------
+# NOT redefined here. input_size, resize_mode, to_rgb and normalize are read from
+# config/data.yaml `preprocessing:` so train and eval cannot drift from Stage 2.
+# Recorded into the run manifest at runtime.
+
+# --- augmentation (D208) -------------------------------------------------------
+# TRAIN SPLIT ONLY. Validation and test receive resize -> to-RGB -> normalize and
+# nothing else, enforced by building two separate transform objects.
+# Every entry below is transcribed from docs/dataset_analysis.md §11. Do not add
+# an augmentation that is not in that table; do not enable one marked false
+# without amending §11 first.
+augmentation:
+  enabled: true
+  rotation_deg: 10.0                    # §11 "Patient positioning ... genuinely vary"
+  zoom_min: 0.9                         # §11 isotropic ONLY — preserves cardiothoracic ratio
+  zoom_max: 1.0
+  translate_frac: 0.05                  # §11 must pad, never crop out (§10.1)
+  brightness: 0.10                      # §11 ±10%
+  contrast: 0.10                        # §11 ±10%
+  # Explicitly disabled, with the reason, so nobody "helpfully" turns them on.
+  horizontal_flip: false                # §11.1 — fabricates ~50% dextrocardia
+  vertical_flip: false                  # §11 — no radiograph is upside-down
+  shear: false                          # §11 — directly alters the measured quantity
+  random_erasing: false                 # §11 — can delete the finding, keep the label
+  mixup: false                          # §11 — blends labels
+  cutmix: false                         # §11 — blends labels
+  clahe: false                          # §10.3 — ablation on best model only, not core
+
+# --- model ---------------------------------------------------------------------
+model:
+  # One of: resnet152 | densenet201 | efficientnet_v2_s | mobilenet_v3_large
+  # These four and only these four are the compute-validated baseline set
+  # (artifacts/stage2/reports/vram_probe.json). Do not add architectures.
+  name: resnet152
+  pretrained: true                      # ImageNet — §10.2 relies on pretrained stem stats
+  num_outputs: 1                        # single logit + BCEWithLogits, binary Cardiomegaly
+  dropout: 0.0                          # 0.0 = keep each backbone's own default head dropout
+
+# --- loss ----------------------------------------------------------------------
+loss:
+  name: bce_with_logits
+  # pos_weight source. 'manifest' reads pos_weight_from_train from
+  # split_manifest.json — the value make_splits.py computed from the TRAIN split
+  # alone. Computing it from val/test would leak their prevalence into training.
+  #   manifest  — read from split_manifest.json  (default, auditable)
+  #   recompute — recompute from the train split CSV
+  #   explicit  — use pos_weight_value below verbatim
+  pos_weight_source: manifest
+  pos_weight_value: 6.246739            # MEASURED, docs/dataset_analysis.md D209
+  # Cross-check the sourced value against a recomputation from the train CSV and
+  # raise if they disagree by more than this. Catches a stale manifest or a split
+  # regenerated without the loss being updated.
+  pos_weight_tolerance: 1.0e-4
+
+# --- optimizer / schedule ------------------------------------------------------
+optim:
+  name: adamw
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+scheduler:
+  name: cosine                          # cosine | step | none
+  warmup_epochs: 1
+  min_lr: 1.0e-6
+
+# --- training loop -------------------------------------------------------------
+train:
+  epochs: 15
+  # MEASURED on the RTX 4060 (vram_probe.json). micro_batch 16 x accum 2 gives an
+  # effective batch of 32 with >3 GiB VRAM headroom on all four architectures.
+  # Do NOT raise micro_batch by trial-and-error on this machine: Windows CUDA
+  # System Memory Fallback spills to host RAM instead of raising OOM, at roughly
+  # 10x slowdown (docs/dataset_analysis.md §14.2.1).
+  micro_batch: 16
+  accum_steps: 2
+  amp: true
+  grad_clip_norm: 0.0                   # 0 disables
+  # Deterministic algorithms. cudnn_benchmark must be false when deterministic.
+  deterministic: true
+  cudnn_benchmark: false
+  early_stopping:
+    enabled: true
+    metric: pr_auc                      # §12.3 — PR-AUC is the honest headline metric
+    mode: max
+    patience: 5
+    min_delta: 0.0
+
+# --- evaluation ----------------------------------------------------------------
+eval:
+  # Operating threshold is selected on VALIDATION ONLY and then applied unchanged
+  # to test. Selecting it on test would be tuning on test.
+  threshold_policy: f1                  # f1 | youden | prevalence | fixed
+  fixed_threshold: 0.5
+  # Report calibration alongside discrimination (Brier + reliability bins).
+  calibration: true
+  calibration_bins: 10
+  # PR-AUC's no-skill baseline is the positive prevalence OF THE SET BEING SCORED.
+  # It is computed at runtime, never hard-coded, and always reported beside PR-AUC.
+
+# --- checkpointing -------------------------------------------------------------
+checkpoint:
+  save_best: true
+  save_last: true
+  monitor: pr_auc
+  mode: max
+  # *.pt / *.pth are excluded from git (.git/info/exclude). Checkpoints stay local.

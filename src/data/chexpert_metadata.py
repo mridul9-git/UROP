@@ -224,6 +224,108 @@ def select_frontal(cfg: dict, df: pd.DataFrame) -> pd.DataFrame:
 # --- patient-level helpers -----------------------------------------------------
 
 
+# --- image path resolution -----------------------------------------------------
+# The metadata CSV and the image release disagree about the top-level directory
+# name. train_cheXbert.csv ships full-release paths:
+#     CheXpert-v1.0/train/patient00001/study1/view1_frontal.jpg
+# while the downsampled release unpacks as CheXpert-v1.0-small/. Joining the two
+# naively resolves to nothing, silently, for every image in the dataset.
+
+_RELEASE_PREFIX_RE = re.compile(r"^chexpert-v1\.0(-small)?$", re.IGNORECASE)
+
+
+def strip_release_prefix(rel_path: str) -> str:
+    """Drop the leading release-directory segment from a metadata Path.
+
+    `CheXpert-v1.0/train/patientX/...`       -> `train/patientX/...`
+    `CheXpert-v1.0-small/train/patientX/...` -> `train/patientX/...`
+    `train/patientX/...`                     -> unchanged
+
+    Only a segment that actually looks like a CheXpert release directory is
+    removed, so a path that is already release-relative is never truncated.
+    """
+    parts = str(rel_path).replace("\\", "/").split("/")
+    if parts and _RELEASE_PREFIX_RE.match(parts[0]):
+        parts = parts[1:]
+    return "/".join(parts)
+
+
+def _images_cfg(cfg: dict) -> dict:
+    """Fetch the `images` config block, or explain what is missing.
+
+    A bare KeyError here is loud but useless — this names the file and the exact
+    keys required.
+    """
+    img = cfg.get("images")
+    if not img:
+        raise KeyError(
+            "config/data.yaml has no `images:` block. Image-dependent scripts need:\n"
+            "  images:\n"
+            "    root: <directory CONTAINING the release directory>\n"
+            "    release_dir: CheXpert-v1.0-small\n"
+            "    expect_subdir: train"
+        )
+    missing = [k for k in ("root", "release_dir", "expect_subdir") if k not in img]
+    if missing:
+        raise KeyError(f"config/data.yaml `images:` block is missing key(s): {missing}")
+    return img
+
+
+def image_release_root(cfg: dict) -> Path:
+    """The directory the images are expected to live under: root / release_dir."""
+    img = _images_cfg(cfg)
+    return Path(img["root"]) / img["release_dir"]
+
+
+def verify_image_root(cfg: dict) -> Path:
+    """Fail loudly unless the expected image release layout is present.
+
+    Called once at the start of every image-dependent script. A missing or
+    mis-shaped image root must stop the run immediately — the alternative is
+    hundreds of thousands of per-file 'missing' records that look like a corrupt
+    dataset rather than an un-downloaded one.
+    """
+    img = _images_cfg(cfg)
+    root = Path(img["root"])
+    release = image_release_root(cfg)
+    expect = release / img["expect_subdir"]
+
+    if not root.exists():
+        raise FileNotFoundError(
+            f"Image root does not exist: {root}\n"
+            f"Set `images.root` in config/data.yaml to the directory that CONTAINS "
+            f"the unpacked release directory '{img['release_dir']}'."
+        )
+    if not release.exists():
+        siblings = sorted(p.name for p in root.iterdir() if p.is_dir())[:10]
+        raise FileNotFoundError(
+            f"Release directory not found: {release}\n"
+            f"Directories present in {root}: {siblings or '(none)'}\n"
+            f"Either unpack the release there, or set `images.release_dir` to the "
+            f"actual directory name."
+        )
+    if not expect.exists():
+        present = sorted(p.name for p in release.iterdir() if p.is_dir())[:10]
+        raise FileNotFoundError(
+            f"Expected subdirectory '{img['expect_subdir']}' not found under {release}\n"
+            f"Subdirectories present: {present or '(none)'}\n"
+            f"The release may have unpacked one level deeper (a nested "
+            f"'{img['release_dir']}/{img['release_dir']}/' is a common archive quirk)."
+        )
+    return release
+
+
+def resolve_image_path(cfg: dict, rel_path: str) -> Path:
+    """Map one metadata Path to its location in the image release.
+
+    Pure path arithmetic — does not touch the filesystem, so it is cheap enough to
+    call once per row. Existence is checked by the caller (validate_images records
+    a `missing` status rather than raising, so one absent file does not abort a
+    200k-image sweep).
+    """
+    return image_release_root(cfg) / strip_release_prefix(rel_path)
+
+
 def patient_level_labels(df: pd.DataFrame) -> pd.DataFrame:
     """Collapse to one row per patient for stratification and leakage checks.
 

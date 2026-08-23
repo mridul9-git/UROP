@@ -1,6 +1,6 @@
 # Execution Flow — actual codebase
 
-**Last updated:** 16/08/2026 · **Stage:** 2
+**Last updated:** 21/08/2026 · **Stage:** 2
 
 Documents **only functions and classes that exist in the repository today**. No training,
 model, optimisation or XAI code has been written, so none is described here.
@@ -19,10 +19,12 @@ with its own `main()` guarded by `if __name__ == "__main__":`.
 |---|---|---|---|---|
 | `src/data/plot_published_stats.py` | Step 18 figures from published values | no | no | ✅ **yes — has run** |
 | `src/data/probe_vram.py` | Step 14 VRAM/throughput measurement | no | no | ✅ **yes — has run** (21/08/2026) |
-| `src/data/analyze_metadata.py` | Steps 3, 4, 6, 12 tables + figures | **yes** | no | ⛔ blocked on CSV |
-| `src/data/make_splits.py` | Steps 5, 13, 15 splits + manifest | **yes** | no | ⛔ blocked on CSV |
+| `src/data/analyze_metadata.py` | Steps 3, 4, 6, 12 tables + figures | **yes** | no | ✅ **yes — has run on real data** (21/08) |
+| `src/data/make_splits.py` | Steps 5, 13, 15 splits + manifest | **yes** | no | ✅ **yes — has run on real data** (21/08) |
 | `src/data/validate_images.py` | Steps 8, 9 integrity + dimensions | yes | **yes** | ⛔ blocked on images |
 | `src/data/find_duplicates.py` | Step 7 duplicate analysis | yes | **yes** | ⛔ blocked on images |
+| `src/data/test_path_resolution.py` | path-resolution smoke test | no | no | ✅ **yes — passes** (21/08) |
+| `src/data/test_find_duplicates.py` | hash-failure regression test | no | no | ✅ **yes — 29 checks pass** (24/08) |
 
 `src/data/chexpert_metadata.py` is a **library, not an entry point** — it has no `main()`.
 
@@ -90,7 +92,7 @@ Reads **no dataset file**. Its inputs are module-level constants transcribed fro
 sources — `TABLE1`, `N_STUDIES`, `TABLE3_CARDIOMEGALY`, `COMPOSITION` — each carrying its
 citation in `SOURCE_T1` / `SOURCE_T3` / `SOURCE_DS`. Helpers: `_caption`, `_labels`.
 
-### 3.2 `analyze_metadata.py` — ⛔ blocked on CSV (tested on fixture)
+### 3.2 `analyze_metadata.py` — **CONFIRMED, has run on real data**
 
 ```text
 main()
@@ -110,7 +112,7 @@ main()
 
 Helpers: `_md_table`, `_pct`, `_bar_labels`.
 
-### 3.3 `make_splits.py` — ⛔ blocked on CSV (tested on fixture)
+### 3.3 `make_splits.py` — **CONFIRMED, has run on real data**
 
 ```text
 main()
@@ -163,18 +165,30 @@ main()
   ├─ argparse: --near | --max-hamming | --workers
   ├─ select_frontal(load_split_csv(cfg,"train"))
   ├─ L3/L4 legitimate repetition: groupby study_id / patient_id     [reported, never removed]
-  ├─ L1/L2 exact: ThreadPool → sha1_of() → group by digest
+  ├─ L1/L2 exact: hash_all(sha1_of) → group by digest
+  │      ANY unhashable file aborts here — no partial report
   │      flags groups spanning >1 patient as the dangerous case
-  ├─ L5 (only with --near): dhash() → bucket by first 16 bits
+  ├─ L5 (only with --near): hash_all(dhash) → bucket by first 16 bits
   │      → compare within buckets → keep CROSS-PATIENT pairs only
   └─ writes reports/duplicates.md, duplicates_exact.csv, duplicates_near_crosspatient.csv
 ```
 
 | Function | Signature |
 |---|---|
-| `_resolve` | `(root, rel) -> Path` — handles `Path` values that already include the release dir |
-| `sha1_of` | `(root, rel) -> (rel, hexdigest)`; returns `""` on failure |
-| `dhash` | `(root, rel, size=8) -> (rel, bitstring)` — 64-bit difference hash |
+| `sha1_of` | `(cfg, rel) -> (rel, hexdigest\|None, error\|None)` |
+| `dhash` | `(cfg, rel, size=8) -> (rel, bitstring\|None, error\|None)` — 64-bit difference hash |
+| `hash_all` | `(fn, cfg, paths, workers, label, rep_dir) -> {rel: digest}`; **raises `HashFailureError`** naming every unhashable file |
+| `HashFailureError` | raised when any file cannot be hashed — the report is then NOT written |
+
+**Hash-failure handling — FIXED 24/08/2026.** `sha1_of` / `dhash` previously
+returned `""` on any exception and `main()` dropped those rows with a bare
+`if dig:`. A damaged or unreadable file therefore vanished from the analysis
+while `duplicates.md` still printed "Files hashed: N" as though complete — and
+damaged files are exactly what the sweep exists to find. Failures are now
+returned as data, collected by `hash_all`, written to
+`reports/duplicates_hash_failures.csv` (`Path, resolved, stage, error`), and
+raised as `HashFailureError`. The script exits **2** and writes no duplicates
+report at all. Covered by `src/data/test_find_duplicates.py` (29 checks).
 
 ### 3.6 `probe_vram.py` — **CONFIRMED, has run** (no data needed)
 
@@ -245,7 +259,10 @@ real JPEGs, realistic label marginals; generator in the session scratchpad, not 
 | `make_splits.py` full run | pass — **`assert_disjoint` passes**; train 124 / val 60 / test 60 patients |
 | `validate_images.py` full run | pass — 1,001 checked, 0 excluded |
 | `find_duplicates.py --near` | pass — L1–L5 report written |
+| **`test_find_duplicates.py`** (24/08/2026) | pass — **29 checks**: normal hashing correct; a deliberate failure raises `HashFailureError` naming the path; script exits **2**; **no `duplicates.md` / `duplicates_exact.csv` written** after a failure |
 | `plot_published_stats.py` | pass — 5 figures, on real published values |
+| **`analyze_metadata.py` on REAL data** (21/08/2026) | pass — 223,414 rows parsed, 0 unparseable `Path`; `valid.csv` absent branch exercised (warns, continues) |
+| **`make_splits.py` on REAL data** (21/08/2026) | pass — **`assert_disjoint` held on 33,021 real patients**; 40,002 / 29,380 / 28,883 images |
 | Subset nesting (200 ⊂ 400 ⊂ 600) | pass |
 | `compact_formatter` at sub-1k scale | pass (regression: previously rendered "0k") |
 | `probe_vram.py` on the real RTX 4060 (21/08/2026) | pass — 4 models measured, `vram_probe.json` written |
@@ -254,6 +271,49 @@ real JPEGs, realistic label marginals; generator in the session scratchpad, not 
 `docs/data_pipeline.md` §2.6 and §2.7: the `StratifiedGroupKFold` fraction error, and the
 axis formatter collapsing sub-1000 counts to "0k".
 
-**UNKNOWN until real data arrives:** whether the real `Path` format, the `AP/PA` value set,
-and the actual column list match §2.3 of `dataset_analysis.md`. The scripts raise loudly
-rather than guessing if they do not.
+## 6. Real-data run — what actually changed (21/08/2026)
+
+The **code path is unchanged**; only configuration and inputs moved.
+
+| Item | Before | Now |
+|---|---|---|
+| `dataset.root` | `E:/UROP/data/raw/CheXpert-v1.0-small` | `E:/UROP` |
+| `dataset.train_csv` | `train.csv` | **`train_cheXbert.csv`** (D211) |
+| `valid.csv` | assumed present | **absent** — the warn-and-continue branch in `analyze_metadata.main()` is now the live path, not a hypothetical |
+| `make_splits` mode | intended `official-test` | **`fallback-carved-test`** — `test_set.enabled: false` |
+
+**CONFIRMED resolved:** the real `Path` format, the `AP/PA` value set and the column list
+all parse. `attach_identifiers` produced **0 unparseable rows** across 223,414 paths, and
+all 19 expected columns were present.
+
+**One schema difference, harmless:** `No Finding` is the last column rather than the first
+label. All code addresses observations by name via `OBSERVATIONS`, so nothing broke — but
+positional indexing anywhere would silently mislabel.
+
+## 7. Image-path resolution — **FIXED 21/08/2026**
+
+The split CSVs carry the full-release prefix `CheXpert-v1.0/train/…` (what
+`train_cheXbert.csv` ships) while the downsampled release unpacks to
+`CheXpert-v1.0-small/`. The two ad-hoc per-script resolvers were replaced by one
+explicit implementation in `chexpert_metadata.py`, driven by the new `images:` config
+block.
+
+| Function | Signature | Behaviour |
+|---|---|---|
+| `_images_cfg` | `(cfg) -> dict` | fetches the `images:` block; **raises `KeyError` naming the required keys** rather than a bare lookup failure |
+| `strip_release_prefix` | `(rel_path) -> str` | drops a leading `CheXpert-v1.0` / `CheXpert-v1.0-small` segment; normalises `\` to `/`; leaves a prefix-less path untouched |
+| `image_release_root` | `(cfg) -> Path` | `images.root / images.release_dir` |
+| `verify_image_root` | `(cfg) -> Path` | **raises `FileNotFoundError`** if root, release dir, or `expect_subdir` is missing, listing what *is* present |
+| `resolve_image_path` | `(cfg, rel_path) -> Path` | pure path arithmetic, no filesystem access — cheap per row |
+
+**Call sites changed:** `validate_images.check_one(rel_path, cfg, full_decode)` and
+`find_duplicates.sha1_of(cfg, rel)` / `dhash(cfg, rel)` now take `cfg` instead of a bare
+`root`, and both `main()` functions call `verify_image_root()` before doing any work.
+`find_duplicates._resolve()` is deleted.
+
+**CONFIRMED by test** — `src/data/test_path_resolution.py` builds a throwaway release tree
+and asserts: loud failure on all three missing-layout cases; correct stripping for four
+prefix variants including Windows separators and the `valid/` split; correct resolution
+for a frontal AP, a frontal PA and a lateral image; and that the old naive join does *not*
+resolve. Additionally verified against real data: **all 98,265 split-CSV paths resolve,
+0 malformed.**

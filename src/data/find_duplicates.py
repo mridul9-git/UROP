@@ -44,38 +44,117 @@ from chexpert_metadata import (  # noqa: E402
     ensure_dirs,
     load_config,
     load_split_csv,
+    resolve_image_path,
     select_frontal,
+    verify_image_root,
 )
 
 CHUNK = 1 << 20  # 1 MiB
 
-
-def _resolve(root: Path, rel: str) -> Path:
-    p = root / rel
-    return p if p.exists() else root.parent / rel
+# Written when hashing fails. Named so it can never be mistaken for a result.
+FAILURE_CSV = "duplicates_hash_failures.csv"
 
 
-def sha1_of(root: Path, rel: str) -> tuple[str, str]:
-    """Content hash of one file. Returns ('', reason) on failure."""
+class HashFailureError(RuntimeError):
+    """At least one file could not be hashed, so the analysis is incomplete.
+
+    Raised instead of returning a partial result. A duplicate report computed
+    over a silently reduced corpus understates every count it prints — and the
+    files most likely to be dropped are the damaged ones, which are exactly the
+    ones a duplicate/integrity sweep exists to find.
+    """
+
+
+def sha1_of(cfg: dict, rel: str) -> tuple[str, str | None, str | None]:
+    """Content hash of one file.
+
+    Returns `(rel, hexdigest, None)` on success and `(rel, None, reason)` on
+    failure. The failure is DATA, not an empty string: an empty digest was
+    previously indistinguishable from "not in the corpus" and got dropped by a
+    truthiness test in the caller. Callers must treat a non-None reason as
+    fatal — see `hash_all`.
+    """
     try:
         h = hashlib.sha1()
-        with open(_resolve(root, rel), "rb") as fh:
+        with open(resolve_image_path(cfg, rel), "rb") as fh:
             while chunk := fh.read(CHUNK):
                 h.update(chunk)
-        return rel, h.hexdigest()
-    except Exception:  # noqa: BLE001 — unreadable files are validate_images.py's job
-        return rel, ""
+        return rel, h.hexdigest(), None
+    except Exception as exc:  # noqa: BLE001 — reported, never swallowed
+        return rel, None, f"{type(exc).__name__}: {exc}"
 
 
-def dhash(root: Path, rel: str, size: int = 8) -> tuple[str, str]:
-    """64-bit difference hash — robust to resize/compression, sensitive to content."""
+def dhash(cfg: dict, rel: str, size: int = 8) -> tuple[str, str | None, str | None]:
+    """64-bit difference hash — robust to resize/compression, sensitive to content.
+
+    Same contract as `sha1_of`: `(rel, bitstring, None)` or `(rel, None, reason)`.
+    """
     try:
-        with Image.open(_resolve(root, rel)) as im:
+        with Image.open(resolve_image_path(cfg, rel)) as im:
             g = np.asarray(im.convert("L").resize((size + 1, size)), dtype=np.int16)
         bits = (g[:, 1:] > g[:, :-1]).flatten()
-        return rel, "".join("1" if b else "0" for b in bits)
-    except Exception:  # noqa: BLE001
-        return rel, ""
+        return rel, "".join("1" if b else "0" for b in bits), None
+    except Exception as exc:  # noqa: BLE001 — reported, never swallowed
+        return rel, None, f"{type(exc).__name__}: {exc}"
+
+
+def hash_all(fn, cfg: dict, paths: list[str], workers: int, label: str,
+             rep_dir: Path) -> dict[str, str]:
+    """Hash every path with `fn`, or fail loudly naming every file that could not be.
+
+    Returns `{rel: digest}` covering ALL of `paths`, or raises. There is
+    deliberately no partial-success path: the previous behaviour dropped failed
+    files from the digest map and then reported "Files hashed: N" against a
+    larger scope figure, with nothing tying the two numbers together.
+
+    On failure the offending paths and their exceptions are written to
+    `reports/duplicates_hash_failures.csv` — a diagnostic, not a result — and
+    HashFailureError is raised before any duplicate report is written.
+    """
+    digests: dict[str, str] = {}
+    failures: list[dict[str, str]] = []
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = [pool.submit(fn, cfg, p) for p in paths]
+        for f in tqdm(as_completed(futs), total=len(futs), unit="file"):
+            rel, digest, error = f.result()
+            if error is not None:
+                failures.append({"Path": rel,
+                                 "resolved": str(resolve_image_path(cfg, rel)),
+                                 "stage": label, "error": error})
+            else:
+                digests[rel] = digest
+
+    if failures:
+        rep_dir.mkdir(parents=True, exist_ok=True)
+        out = rep_dir / FAILURE_CSV
+        pd.DataFrame(failures, columns=["Path", "resolved", "stage", "error"]) \
+            .to_csv(out, index=False)
+
+        shown = failures[:10]
+        detail = "\n".join(f"    {r['Path']}\n      -> {r['resolved']}\n"
+                           f"      {r['error']}" for r in shown)
+        more = (f"\n    ... and {len(failures) - len(shown):,} more"
+                if len(failures) > len(shown) else "")
+        raise HashFailureError(
+            f"{label}: {len(failures):,} of {len(paths):,} files could not be "
+            f"hashed.\n"
+            f"THE DUPLICATE REPORT IS INCOMPLETE AND HAS NOT BEEN WRITTEN.\n"
+            f"Affected files:\n{detail}{more}\n"
+            f"  Full list: {out}\n"
+            f"  Duplicate counts computed without these files would understate "
+            f"every total, and damaged files are precisely what this sweep "
+            f"looks for. Run validate_images.py to quarantine unreadable files "
+            f"into excluded_images.csv, then re-run."
+        )
+
+    # Every input path is accounted for; assert rather than trust the loop.
+    if len(digests) != len(set(paths)):
+        raise HashFailureError(
+            f"{label}: hashed {len(digests):,} distinct paths but was given "
+            f"{len(set(paths)):,}. Refusing to report on a partial corpus."
+        )
+    return digests
 
 
 def main() -> None:
@@ -88,7 +167,10 @@ def main() -> None:
 
     cfg = load_config()
     ensure_dirs(cfg)
-    root = Path(cfg["dataset"]["root"])
+    # Stop immediately if the image release is absent or mis-shaped, rather than
+    # emitting one 'unreadable' record per image.
+    release = verify_image_root(cfg)
+    print(f"[info] image release: {release}")
     rep_dir = Path(cfg["paths"]["reports"])
 
     df = select_frontal(cfg, load_split_csv(cfg, "train"))
@@ -120,13 +202,9 @@ def main() -> None:
 
     # ------------------------------------------------- L1 / L2: exact ----------
     print(f"[info] SHA-1 hashing {len(paths):,} files")
-    digests: dict[str, str] = {}
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futs = [pool.submit(sha1_of, root, p) for p in paths]
-        for f in tqdm(as_completed(futs), total=len(futs), unit="file"):
-            rel, dig = f.result()
-            if dig:
-                digests[rel] = dig
+    # Raises HashFailureError naming every unhashable file rather than dropping
+    # it. Nothing below this line runs on a partial corpus.
+    digests = hash_all(sha1_of, cfg, paths, args.workers, "sha1", rep_dir)
 
     by_hash: dict[str, list[str]] = defaultdict(list)
     for rel, dig in digests.items():
@@ -169,13 +247,9 @@ def main() -> None:
     # ------------------------------------------------- L5: near-duplicate ------
     if args.near:
         print(f"[info] dHash over {len(paths):,} files")
-        hashes: dict[str, str] = {}
-        with ThreadPoolExecutor(max_workers=args.workers) as pool:
-            futs = [pool.submit(dhash, root, p) for p in paths]
-            for f in tqdm(as_completed(futs), total=len(futs), unit="img"):
-                rel, hh = f.result()
-                if hh:
-                    hashes[rel] = hh
+        # Same contract as the SHA-1 pass: any unreadable image aborts the L5
+        # analysis rather than quietly shrinking the comparison set.
+        hashes = hash_all(dhash, cfg, paths, args.workers, "dhash", rep_dir)
 
         # Bucket by the first 16 bits, then compare only within buckets. Exact
         # matches and small-Hamming pairs almost always share a prefix, which
@@ -226,4 +300,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except HashFailureError as exc:
+        # Exit 2 (not 1) so an automated caller can distinguish "some files are
+        # unhashable, the report is incomplete" from an ordinary crash.
+        print(f"\n[FAIL] {exc}", file=sys.stderr)
+        sys.exit(2)

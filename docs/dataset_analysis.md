@@ -136,7 +136,7 @@ Two consequences that shape this project:
 | Release | Format | Resolution | Download | Extracted | **CONFIRMED by** |
 |---|---|---|---:|---:|---|
 | CheXpert v1.0 (full) | JPEG | original DICOM dims | ~440 GB | ~440 GB | CheXpert datasheet, arXiv:2105.03020 |
-| **CheXpert-v1.0-small** | JPEG | ~390 × 320 (aspect preserved) | **~11 GB** | **~11 GB** | same |
+| **CheXpert-v1.0-small** | JPEG | ~390 × 320 (aspect preserved) | **~11 GB** | **~11 GB** | Characteristics: same datasheet. **Current availability: UNVERIFIED** — no download source has ever been confirmed for this release (see D201) |
 | CheXpert Plus (2024/25) | **DICOM** + reports | original | ~500 GB+ | — | Stanford AIMI / arXiv:2405.19538 |
 | Official test set images | JPEG | original | < 1 GB (668 images) | — | CheXlocalize dataset, Stanford AIMI |
 | Official test set labels | CSV | — | < 1 MB | — | `github.com/rajpurkarlab/cheXpert-test-set-labels` |
@@ -294,7 +294,7 @@ for frontal-only selection (§4).
 | 2 | `Sex` | str | `Male` / `Female` / `Unknown` |
 | 3 | `Age` | int | complete years at study time |
 | 4 | `Frontal/Lateral` | str | `Frontal` / `Lateral` |
-| 5 | `AP/PA` | str | projection; blank for laterals — **VERIFY exact value set** |
+| 5 | `AP/PA` | str | projection; blank for laterals. **MEASURED value set:** `AP` / `PA` / `LL` / `RL` (§4.1) |
 | 6–19 | the 14 observations | float | `1.0` / `0.0` / `-1.0` / blank |
 
 The 14 observations, in CSV order: `No Finding`, `Enlarged Cardiomediastinum`,
@@ -342,15 +342,78 @@ This is easy to get wrong and it matters: it means treating blank as negative is
 invention, it is the dataset paper's own accounting convention. Our config makes this
 explicit (`target.blank_is_negative: true`) rather than leaving it to a silent `fillna`.
 
-**VERIFY** — the counts above are per *study*. Our unit of training is the *image*, and
-train.csv has ~1.19 images per study. The image-level split of the four states, and
-specifically the **frontal-only** image-level split, is **not published anywhere** and
-must be computed. `src/data/analyze_metadata.py` produces both tables.
-
 **Context — Cardiomegaly has unusually LOW label uncertainty.** Among the five CheXpert
 competition tasks, its 3.52% uncertain rate is the lowest by a wide margin
 (Consolidation 12.78%, Atelectasis 15.66%, Pneumonia 8.34%, Edema 6.17%). This single
-fact drives the recommendation below.
+fact drives the recommendation below — and it holds *even more strongly* in the file we
+actually acquired (§3.3).
+
+### 3.1a MEASURED distribution — `train_cheXbert.csv`, 21/08/2026
+
+Everything above is the *published* description of the original release. What follows is
+**measured from the file on disk** by `src/data/analyze_metadata.py`.
+
+| State | Images | % images | Studies | % studies |
+|---|---:|---:|---:|---:|
+| Positive `1.0` | 30,566 | 13.68% | 25,840 | 13.77% |
+| Negative `0.0` | 16,155 | 7.23% | 11,227 | 5.98% |
+| Uncertain `-1.0` | 3,917 | 1.75% | 3,327 | 1.77% |
+| Blank (no mention) | 172,776 | 77.33% | 147,247 | 78.47% |
+| **Total** | **223,414** | **100.00%** | **187,641** | **100.00%** |
+
+**Frontal images only (191,027) — the modelling frame:**
+
+| State | Images | % of frontal |
+|---|---:|---:|
+| Positive | 26,283 | 13.76% |
+| Negative | 11,456 | 6.00% |
+| Uncertain | 3,372 | 1.77% |
+| Blank | 149,916 | 78.48% |
+
+This **resolves U3–U4**: the image-level and frontal-only distributions were previously
+unpublished and are now measured. Negative + blank = 84.57% (images), within 0.3 pp of the
+paper's 84.23% study-level figure — the two labellers agree closely on the negative mass.
+
+### 3.3 Label provenance — `train_cheXbert.csv`, NOT the original rule-based labels
+
+> **This is a deliberate substitution and must be stated in the report. Decision D211.**
+
+The file acquired from Stanford AIMI is **`train_cheXbert.csv`** — the CheXpert training
+set relabelled with **CheXbert** (Smit et al. 2020), a BERT-based report labeller. It is
+**not** the original rule-based labeller output of Irvin et al. 2019 that `train.csv`
+contains, and which §3.1's published tables describe.
+
+**What is identical (CONFIRMED by measurement):**
+
+| Property | Value |
+|---|---|
+| Images / patients / studies | 223,414 / 64,540 / 187,641 — exact match to the published release |
+| Frontal / lateral | 191,027 / 32,387 — exact match |
+| Columns | all 19, including `Path`, `Sex`, `Age`, `Frontal/Lateral`, `AP/PA` |
+| Label encoding | same four states: `1.0` / `0.0` / `-1.0` / blank |
+| `Path` values | identical, and in identical order to `train_visualCheXbert.csv` |
+
+**What differs:** the labels themselves. Cardiomegaly uncertainty is **1.77% of studies
+here vs 3.52% reported for the original labeller** — CheXbert resolves roughly half of the
+original hedged cases. Positive rate is 13.77% vs 12.26%.
+
+**Consequence for D203, stated honestly:** Irvin et al. Table 3's uncertainty-policy AUCs
+were measured with the *original* labeller, so they are **indicative for this file, not
+exactly applicable**. D203's reasoning nonetheless *strengthens*: with uncertainty at 1.77%
+rather than 3.52%, the policy choice moves only **3,372 frontal images (1.77%)**, so the
+case for the simple U-Zeros option over a task-restructuring U-MultiClass is stronger than
+when the decision was made. **D203 is unchanged.**
+
+**One schema difference worth recording:** in this file `No Finding` is the *last* column
+(19) rather than the first label (6). All project code addresses observations by name, so
+nothing breaks — but any positional indexing would silently mislabel.
+
+**`train_visualCheXbert.csv` is an ablation only, never the primary** (config
+`dataset.ablation_train_csv`). VisualCheXbert predicts image-derived rather than
+report-derived labels: **58.33% frontal prevalence with zero uncertain and zero blank
+states**. Substituting it would void D203 (no uncertainty to police) and invert D209
+(`pos_weight` 0.71 — positives would be *down*weighted). It is a different task, not a
+different file.
 
 ### 3.2 WHAT WE RECOMMEND
 
@@ -409,15 +472,29 @@ gives the best number** — declare U-Zeros as primary before seeing test result
 
 ### 4.1 WHAT THE DATASET SAYS
 
+All **MEASURED** from `train_cheXbert.csv`, 21/08/2026 — every item below was previously
+VERIFY and is now settled.
+
 - `Frontal/Lateral` ∈ {`Frontal`, `Lateral`} — **CONFIRMED**.
-- `AP/PA` distinguishes projection within frontal images; blank for laterals.
-  Values are `AP`, `PA`, and — **VERIFY** — possibly `LL` / `RL` on a small number of rows.
-  `select_frontal()` fills any blank with `Unknown` rather than dropping the row silently.
-- **VERIFY** — widely reported train-set counts: **191,027 frontal / 32,387 lateral**
-  (85.5% / 14.5%). Consistent with 223,414 total, but this specific split is a secondary
-  claim and `analyze_metadata.py` will confirm it.
-- **VERIFY** — frontal images are reported to be roughly **85% AP / 15% PA**. CheXpert is
-  a tertiary inpatient population; most films are portable AP.
+- **Frontal 191,027 (85.50%) / Lateral 32,387 (14.50%)** — **U1 CONFIRMED**, matching the
+  previously-secondary figure exactly.
+- **U2 CONFIRMED — and `LL`/`RL` do occur.** Full measured value set:
+
+| `Frontal/Lateral` | `AP/PA` | Images | % of all |
+|---|---|---:|---:|
+| Frontal | AP | 161,590 | 72.33% |
+| Frontal | PA | 29,420 | 13.17% |
+| Frontal | **LL** | **16** | 0.01% |
+| Frontal | **RL** | **1** | 0.00% |
+| Lateral | *(blank)* | 32,387 | 14.50% |
+
+- Within frontals: **AP 84.59% / PA 15.40%** — confirming the expected inpatient-heavy
+  portable-AP skew that D204's confound analysis assumes.
+- `AP/PA` is blank for **exactly** the 32,387 laterals and never for a frontal, so the
+  blank is structural, not missing data. `select_frontal()` maps it to `Unknown`.
+- **17 frontal images carry a lateral projection code** (`LL`/`RL`) — an internal
+  contradiction in the source metadata. See §8.4; retained and flagged, not silently
+  dropped.
 
 ### 4.2 WHAT WE RECOMMEND
 
@@ -473,8 +550,24 @@ not a failure. It runs alongside the Support Devices probe using the same machin
 **CONFIRMED** — 223,414 training images across 187,641 studies from **64,540 patients**.
 
 **INFERRED** — that is **≈ 2.91 studies per patient** and **≈ 3.46 images per patient**.
-The overwhelming majority of patients appear more than once. `analyze_metadata.py`
-reports the exact distribution and `figures/images_per_patient.png` plots it.
+
+**MEASURED, 21/08/2026** (frontal images only, the actual modelling frame — **U5 resolved**):
+
+| Statistic | Value |
+|---|---:|
+| Patients with ≥1 frontal image | 64,534 |
+| Mean frontal images per patient | 2.96 |
+| **Median** frontal images per patient | **1** |
+| Max frontal images for one patient | **91** |
+| Patients with >1 frontal image | **31,744 (49.19%)** |
+| Patients with >1 study | 30,975 (48.00%) |
+| Patients positive in any study | 12,759 (19.77%) |
+
+The distribution is **heavily right-skewed**: the median patient contributes a single
+image, but the mean is 2.96 and one patient contributes 91. Roughly **half of all patients
+contribute more than one frontal image**, and those patients carry disproportionate weight
+in any leakage — a random image-level split would scatter one person's 91 radiographs
+across all three sets. Plotted in `figures/dataset/images_per_patient.png`.
 
 ### 5.2 Why image-level random splitting leaks
 
@@ -541,41 +634,48 @@ we have the wrong release and must stop.
 | Train studies | 187,641 | Irvin Table 1 (column sums) |
 | Valid patients / studies | 200 / 200 | Irvin et al. 2019 |
 | Test patients / studies | 500 / 500 | Irvin et al. 2019 |
-| Frontal images (train) | 191,027 (85.5%) | **VERIFY** |
-| Lateral images (train) | 32,387 (14.5%) | **VERIFY** |
+| Frontal images (train) | 191,027 (85.5%) | ✅ **MEASURED — exact match** |
+| Lateral images (train) | 32,387 (14.5%) | ✅ **MEASURED — exact match** |
 
 **INFERRED consistency check:** 64,540 + 200 + 500 = 65,240 ✓ and
-223,414 + 234 + 668 = 224,316 ✓. The published figures are internally consistent, which
-is mild evidence they are right.
+223,414 + 234 + 668 = 224,316 ✓. The published figures are internally consistent.
 
-### 6.2 Cardiomegaly, study level (CONFIRMED)
+**MEASURED confirmation, 21/08/2026.** `train_cheXbert.csv` reproduces **every** published
+training-set figure exactly: 223,414 images · 64,540 patients · 187,641 studies · 191,027
+frontal · 32,387 lateral. This is the §6.1 stop-check passing — we have the right release.
 
-| Category | Count | Percentage |
+### 6.2 Cardiomegaly, study level
+
+| Category | Published (Irvin Table 1, rule-based labeller) | **MEASURED (`train_cheXbert.csv`)** |
 |---|---:|---:|
-| Total studies | 187,641 | 100.00% |
-| Cardiomegaly positive | 23,002 | 12.26% |
-| Cardiomegaly uncertain | 6,597 | 3.52% |
-| Cardiomegaly negative + no-mention | 158,042 | 84.23% |
+| Total studies | 187,641 (100.00%) | 187,641 (100.00%) |
+| Positive | 23,002 (12.26%) | **25,840 (13.77%)** |
+| Uncertain | 6,597 (3.52%) | **3,327 (1.77%)** |
+| Negative + no-mention | 158,042 (84.23%) | **158,474 (84.46%)** |
 
-### 6.3 Usable frontal examples — projected (INFERRED)
+The two labellers agree on the **negative mass to within 0.23 pp**. CheXbert's difference
+is concentrated exactly where expected: it resolves ~half the original hedged cases,
+moving them predominantly to positive (§3.3).
 
-Assuming label prevalence is independent of how many frontal images a study contributes
-— **an assumption `analyze_metadata.py` will test, not one to trust**:
+### 6.3 Usable frontal examples — **MEASURED**
 
-| Policy | Usable frontal images | Positive | Negative | Prevalence | Neg : Pos |
-|---|---:|---:|---:|---:|---:|
-| **U-Zeros** *(primary)* | ~191,000 | ~23,400 | ~167,600 | **~12.3%** | **~7.2 : 1** |
-| U-Ones | ~191,000 | ~30,100 | ~160,900 | ~15.8% | ~5.3 : 1 |
-| Exclusion | ~184,300 | ~23,400 | ~160,900 | ~12.7% | ~6.9 : 1 |
+| Policy | Usable frontal images | Positive | Negative | Prevalence | Pos : Neg | `pos_weight` |
+|---|---:|---:|---:|---:|---:|---:|
+| **U-Zeros** *(primary)* | **191,027** | **26,283** | **164,744** | **13.76%** | **1 : 6.27** | **6.268** |
+| U-Ones | 191,027 | 29,655 | 161,372 | 15.52% | 1 : 5.44 | 5.442 |
+| Exclusion | 187,655 | 26,283 | 161,372 | 14.01% | 1 : 6.14 | 6.140 |
 
-**These are projections, not measurements.** The exact table is produced by
-`analyze_metadata.py` → `artifacts/stage2/reports/metadata_analysis.md`.
+The pre-measurement projection was ~12.3% prevalence at ~1:7.2; **measured 13.76% at
+1:6.27**. The projection assumed prevalence is independent of how many frontal images a
+study contributes — that assumption is now tested and holds well (study-level 13.77% vs
+image-level frontal 13.76%, a 0.01 pp difference). **U3–U4 resolved.**
 
-### 6.4 Class imbalance verdict
+### 6.4 Class imbalance verdict — **CONFIRMED**
 
-**~1 positive to ~7 negatives is moderate, not severe.** This is good news and it
-constrains §12: severe-imbalance machinery (focal loss, heavy oversampling, SMOTE) is not
-warranted and would add tunable hyperparameters that confound the architecture comparison.
+**1 positive to 6.27 negatives is moderate, not severe** — slightly *better* than the ~1:7.2
+projected. §12's conclusion stands unchanged and is now measured rather than estimated:
+severe-imbalance machinery (focal loss, heavy oversampling, SMOTE) is not warranted and
+would add tunable hyperparameters that confound the architecture comparison.
 
 ### 6.5 Plots produced
 
@@ -684,7 +784,39 @@ Two settings make this strict rather than cosmetic:
 | constant | — | — |
 | **total checked** | — | — |
 
-### 8.3 Nothing is deleted
+### 8.3 Metadata-level data quality — **MEASURED, 21/08/2026**
+
+Checks that need only the CSV, run before any image exists. Overall the metadata is
+**clean**; four items are worth recording.
+
+| Check | Result | Assessment |
+|---|---|---|
+| Duplicate `Path` rows | **0** of 223,414 | clean |
+| Missing `Path` / `Sex` / `Age` / `Frontal/Lateral` | **0** | clean |
+| Missing `AP/PA` | 32,387 — **exactly** the laterals, never a frontal | structural, not missing data |
+| `Path` filename vs `Frontal/Lateral` column | **0 disagreements** | clean — view is recoverable from either |
+| Lateral rows with a non-blank `AP/PA` | **0** | clean |
+| **Frontal rows with `LL`/`RL` projection** | **17** | ⚠️ **internal contradiction** |
+| **`Age == 0`** | **3** | ⚠️ implausible; almost certainly "unknown" encoded as 0 |
+| **`Age > 89`** | **7,579** (max **110**) | ⚠️ not HIPAA-capped at 90 |
+| **`Sex == "Unknown"`** | **1** | ⚠️ trivial |
+| Patients with no frontal image | **6** (lateral-only) | excluded by design |
+| Studies with >1 frontal image | 3,361 of 187,625 (max 3) | legitimate L3 repetition (§7.2) |
+
+**The 17 `Frontal` + `LL`/`RL` rows.** The `Frontal/Lateral` column says frontal, the
+filename says `..._frontal.jpg`, but the projection code is a *lateral* one. The source
+metadata contradicts itself. **Disposition: retain and flag.** They are 0.009% of frontals
+and `select_frontal()` already carries them through as their own `AP/PA` category, so they
+are visible in every stratified report rather than silently merged into AP or PA. Dropping
+them would be defensible too, but retaining is the lower-risk default — no data is
+discarded on the strength of a 17-row anomaly, and they can be excluded later by a one-line
+filter if the projection-stratified analysis warrants it.
+
+**Age.** 3 zeros and 7,579 records above 89 (up to 110). Age is not a model input, so
+neither affects training. Both matter only if we report demographic breakdowns, where the
+zeros should be treated as missing and the >89 tail as unreliable.
+
+### 8.4 Nothing is deleted
 
 Failures are written to **`reports/excluded_images.csv`** with `Path`, `status` and a
 `reason` string. The training pipeline reads that manifest and skips those rows. The files
@@ -981,6 +1113,28 @@ requested fraction unless `1/frac` is an integer — asking for 15% that way yie
 14.3%. `make_splits.py` instead cuts a fixed 20 folds and unions `round(frac × 20)` of
 them, so 0.15 means exactly 3/20.
 
+### 13.4a The split as actually produced — **MEASURED, 21/08/2026**
+
+> **Mode: `fallback-carved-test` (70/15/15), NOT the recommended official-test split.**
+> The official 500-patient test set has not been acquired, so `test_set.enabled: false` and
+> `make_splits.py` carved a test set from the training patients, printing a warning and
+> recording `"mode": "fallback-carved-test"` in the manifest. **This split is provisional
+> and must be regenerated once the official test set is obtained** (§13.3).
+
+| Split | Patients | Studies | Images | Positive | Prevalence | AP / PA / LL / RL |
+|---|---:|---:|---:|---:|---:|---|
+| **train** *(T1 subset applied)* | 13,659 | 39,285 | **40,002** | 5,520 | **13.80%** | 33,912 / 6,086 / 4 / 0 |
+| **val** | 9,680 | 28,862 | 29,380 | 4,011 | 13.65% | 24,871 / 4,507 / 2 / 0 |
+| **test** | 9,682 | 28,377 | 28,883 | 3,973 | 13.76% | 24,585 / 4,295 / 2 / 1 |
+
+- **Patient-disjointness verified** — `assert_disjoint` passed before any CSV was written.
+- **Prevalence is well balanced across splits**: 13.80% / 13.65% / 13.76%, a spread of
+  0.15 pp against a pool value of 13.76%. Patient-level stratification worked as designed.
+- **`pos_weight` (train only) = 6.246739** — computed from the *subsetted* train split, not
+  the pool, and recorded in the manifest.
+- Train patients before subsetting: 45,172 (132,764 frontal images). The T1 subset reduced
+  this to 13,659 patients / 40,002 images; **val and test were untouched**, as designed.
+
 ### 13.5 Reproducibility artifacts
 
 `make_splits.py` writes to `artifacts/stage2/splits/`:
@@ -1255,6 +1409,25 @@ split is recorded in `split_manifest.json` rather than assumed.
 
 Set `subset.enabled: false` for the T2 run. Nothing else changes.
 
+### 15.4a T1 as actually produced — **MEASURED, 21/08/2026**
+
+| Property | Target | **Measured** |
+|---|---:|---:|
+| Frontal training images | 40,000 | **40,002** (+0.005%) |
+| Training patients | — | **13,659** of 45,172 available (30.2%) |
+| Positive examples | ~4,900 projected | **5,520** |
+| Prevalence | pool 13.76% | **13.80%** (+0.04 pp) |
+| `pos_weight` | — | **6.246739** |
+| Studies | — | 39,285 |
+
+The sampler hit its image target to within 2 images and held prevalence to within
+0.04 pp of the pool. **The projected ~4,900 positives was conservative — 5,520 measured**,
+because the projection used the pre-measurement 12.3% prevalence estimate rather than the
+true 13.76%.
+
+Validation (29,380 images) and test (28,883 images) were **not** subsampled, so all three
+tiers remain directly comparable.
+
 ### 15.5 Scaling up if more time appears
 
 The deadline is not confirmed, so the plan is built to grow without rework.
@@ -1279,7 +1452,68 @@ Escalation order if time runs short instead: cut the ablation set before cutting
 (the ablations are ~10 of the ~28 hours), then reduce Optuna trials, and only then reduce
 epochs. **Never** cut the test set, the split discipline, or the metric set.
 
-### 15.6 The trade-off, stated plainly
+### 15.6 T1 image acquisition requirement — **exact, 21/08/2026**
+
+Derived from the split CSVs now on disk.
+
+| Need | Images | Est. size @ ~49 KB/image |
+|---|---:|---:|
+| T1 **train** only | **40,002** | ~1.9 GB |
+| T1 train + **val** (needed to train *and* select) | 69,382 | ~3.3 GB |
+| T1 train + val + **test** (full T1 experiment) | **98,265** | **~4.7 GB** |
+| All frontal images (enables T2 without re-downloading) | 191,027 | ~9.2 GB |
+| Entire `CheXpert-v1.0-small` release | 223,414 | **~11 GB** |
+
+**Recommendation: take the whole ~11 GB small release.** The full T1 experiment already
+needs 98,265 images — **51% of all frontal images** — because validation and test are
+deliberately *not* subsampled (§15.2). At that point selective retrieval of ~98k individual
+files is slower and more error-prone than one archive, saves only ~6 GB, and would force a
+second download for T2. Storage is not the constraint: ~11 GB against 301 GB free on `E:`.
+
+**Two concrete blockers to resolve before downloading:**
+
+1. ~~**Path prefix mismatch**~~ — ✅ **FIXED 21/08/2026.** The split CSVs carry
+   `CheXpert-v1.0/train/patient…` (the **full-release** prefix, because that is what
+   `train_cheXbert.csv` ships) while the downsampled release unpacks to
+   `CheXpert-v1.0-small/`. The two per-script resolvers were replaced by a single explicit
+   one in `chexpert_metadata.py` — `strip_release_prefix()` + `resolve_image_path()` +
+   `verify_image_root()` — driven by the new `images:` config block. Verified on **all
+   98,265 split paths (0 malformed)** and covered by `src/data/test_path_resolution.py`.
+   See §15.6.1 for the exact directory layout the resolver now expects.
+2. **Release availability — UNRESOLVED.** D201 assumes the ~11 GB `CheXpert-v1.0-small`
+   release. If Stanford AIMI now offers only the **471 GB** full release, D201 must be
+   revisited: 471 GB **exceeds the 301 GB free on `E:`** and would be discarded down to
+   320 px anyway. **Confirm the small release is still listed before committing.**
+
+#### 15.6.1 Directory layout the resolver expects
+
+```text
+E:/UROP/data/raw/                      <- images.root   (must exist)
+└── CheXpert-v1.0-small/               <- images.release_dir
+    ├── train/                         <- images.expect_subdir (must exist)
+    │   └── patientNNNNN/
+    │       └── studyN/
+    │           ├── viewN_frontal.jpg
+    │           └── viewN_lateral.jpg
+    └── valid/                         (optional; only if valid.csv is obtained)
+```
+
+Resolution is: **strip the leading `CheXpert-v1.0` or `CheXpert-v1.0-small` segment from
+the metadata `Path`, then re-root under `images.root / images.release_dir`.** A `Path`
+that carries no release prefix is passed through unchanged, so the resolver is correct
+whichever prefix a future CSV ships.
+
+`verify_image_root()` runs once at the start of both image-dependent scripts and raises
+`FileNotFoundError` naming the offending directory if `images.root`, the release directory,
+or `train/` is missing — including a listing of what *is* present, since a nested
+`CheXpert-v1.0-small/CheXpert-v1.0-small/` is a common archive quirk. Without this guard a
+missing download produces ~191,000 individual `missing` records that read like a corrupt
+dataset rather than an un-downloaded one.
+
+**If the archive unpacks under a different name**, do not rename it — set
+`images.release_dir` to the actual name. Nothing else changes.
+
+### 15.7 The trade-off, stated plainly
 
 **Data size buys** a slightly better final model and tighter confidence intervals.
 **Experimental speed buys** more experiments, more ablations, more seeds, and the ability
@@ -1404,6 +1638,22 @@ inspection:
 - **Figure 04 has no value axis.** Every bar is directly labelled, so an axis would only
   repeat the numbers.
 
+### 18.1a Produced 21/08/2026 — from the measured metadata
+
+`analyze_metadata.py` generated these from `train_cheXbert.csv`. They **supersede** the
+corresponding deferred entries below.
+
+| Figure | Shows | Basis |
+|---|---|---|
+| `cardiomegaly_label_states.png` | the four raw label states, **image level** | MEASURED |
+| `view_breakdown.png` | images by `Frontal/Lateral` × `AP/PA`, incl. `LL`/`RL` | MEASURED |
+| `uncertainty_policy_balance.png` | frontal pos/neg under all three policies | MEASURED |
+| `images_per_patient.png` | patient repetition — the leakage argument, median 1 / max 91 | MEASURED |
+
+Figures `01`–`05` from `plot_published_stats.py` remain valid and are **not** superseded:
+they document the *published* release against which the measured file was validated, and
+figure `03` (policy AUC with CIs) has no measured counterpart.
+
 ### 18.2 DEFERRED until data arrives
 
 Deliberately **not** produced, because the required data does not exist locally and
@@ -1411,17 +1661,18 @@ fabricating it would defeat the purpose:
 
 | Figure | Blocked on | Produced by | Why deferred |
 |---|---|---|---|
-| View distribution (Frontal/Lateral × AP/PA) | `train.csv` | `analyze_metadata.py` | The commonly cited 191,027 / 32,387 split is a **VERIFY**, secondary-source figure. Charting an unconfirmed number risks it being reused as fact |
-| Label distribution **by view** | `train.csv` | `analyze_metadata.py` | Needs per-row view + label; not published anywhere |
-| Image-level (as opposed to study-level) label counts | `train.csv` | `analyze_metadata.py` | Table 1 is study level only; the image-level split is unpublished |
-| Images per patient | `train.csv` | `analyze_metadata.py` | Distribution is unpublished; only the ~3.46 mean is derivable |
+| ~~View distribution~~ | — | — | ✅ **PRODUCED 21/08/2026** (§18.1a) |
+| ~~Label distribution by view~~ | — | — | ✅ **PRODUCED** — the view × AP/PA breakdown is in §4.1 and `view_breakdown.png` |
+| ~~Image-level label counts~~ | — | — | ✅ **PRODUCED** (§3.1a) |
+| ~~Images per patient~~ | — | — | ✅ **PRODUCED** (§5.1) |
 | Image dimension / aspect-ratio distribution | **image files** | `validate_images.py` | Requires opening every JPEG |
 | Representative example images | **image files** | — | Requires the images; also check RUA figure terms first |
 | Split composition after splitting | `train.csv` | `make_splits.py` | Depends on the actual split |
 
-**The ~11 GB image download was not triggered to satisfy any visualization**, per the
-Stage 2 instruction. Four of the seven deferred figures need only the ~30 MB CSV and will
-appear as soon as it lands.
+**The ~11 GB image download was still not triggered to satisfy any visualization.** Four of
+the seven deferred figures needed only the metadata CSV and were produced on 21/08/2026.
+The **three remaining** all genuinely require pixels: image dimensions, representative
+example images, and the post-split composition against real files.
 
 ---
 
@@ -1434,8 +1685,8 @@ appear as soon as it lands.
 | 3 | Uncertain label representation | ✅ `-1.0`; 6,597 studies (3.52%) (§3) |
 | 4 | Number of patients | ✅ 65,240 total / 64,540 train (§6) |
 | 5 | Studies / images | ✅ 187,641 studies / 224,316 images (§6) |
-| 6 | Frontal images | ⚠️ ~191,027 — **VERIFY** on download (§6) |
-| 7 | Usable pos/neg | ⚠️ projected ~23,400 / ~167,600 — **VERIFY** (§6.3) |
+| 6 | Frontal images | ✅ **191,027 MEASURED** (85.50%); lateral 32,387 (§4.1) |
+| 7 | Usable pos/neg | ✅ **26,283 / 164,744 MEASURED**, 13.76% prevalence, 1:6.27 (§6.3) |
 | 8 | Class imbalance | ✅ ~12.3% positive, ~1:7 — moderate (§6.4, §12) |
 | 9 | Patient-level leakage | ✅ risk quantified; guard implemented and tested (§5) |
 | 10 | Duplicate risk | ✅ 5 levels distinguished; L1–L5 implemented (§7) |
@@ -1453,8 +1704,8 @@ appear as soon as it lands.
 | # | Action | Owner | Unblocks |
 |---:|---|---|---|
 | 1 | Redivis account + accept the Stanford RUA | you | everything |
-| 2 | Download **`train.csv` + `valid.csv` only** (~30 MB) to `E:/UROP/data/raw/CheXpert-v1.0-small/` (§1.8) | you | Steps 3, 4, 6, 12, 13 |
-| 3 | Run `analyze_metadata.py` and `make_splits.py` | me | all ⚠️ VERIFY rows above except 7/8/9 |
+| ~~2~~ | ~~Download the metadata CSV~~ | — | ✅ **DONE 21/08/2026** — `train_cheXbert.csv` acquired (D211); note `valid.csv` was **not** available and remains outstanding (U28) |
+| ~~3~~ | ~~Run `analyze_metadata.py` and `make_splits.py`~~ | — | ✅ **DONE 21/08/2026** — U1–U7, U27 resolved |
 | 4 | Approve the ~11 GB image download | you | Steps 7, 8, 9 |
 | 5 | Acquire the official test set (labels + CheXlocalize images) | you | the §13.2 split; can wait until Stage 3 |
 | ~~6~~ | ~~`pip install torch` + run `probe_vram.py`~~ | — | ✅ **DONE 21/08/2026** — §14.2/§14.3 now measured |
@@ -1480,7 +1731,7 @@ principle but one input is still unverified · **UNKNOWN** = not decidable yet.
 | **Decision** | **CheXpert v1.0, `CheXpert-v1.0-small`** (~11 GB), plus the official 500-patient test set (labels from `rajpurkarlab/cheXpert-test-set-labels`, images from CheXlocalize). Full 440 GB release and CheXpert Plus (DICOM) rejected. |
 | **Reason** | Its native short side is **320 px** — exactly our input size (D206), so the full release would be downsampled to 320 anyway at 40× the storage. Already 8-bit grayscale JPEG, avoiding the DICOM windowing decisions CheXpert Plus would force, which are a research project in themselves and not one of our research questions. |
 | **Evidence** | CheXpert datasheet arXiv:2105.03020 (release sizes and resolutions); Irvin et al. 2019; Stanford AIMI / Redivis portal. |
-| **Confidence** | **FINAL** for the small release. **PROVISIONAL** for the test set — availability is confirmed from the GitHub repo and AIMI, but not yet acquired. |
+| **Confidence** | **Corrected 21/08/2026.** The *preference* for the small release is **FINAL** — its 320 px native short side and 8-bit JPEG encoding are confirmed by the datasheet and are the reasons to want it. Its **availability is UNKNOWN**: no download source for the small-release images has ever been verified. The earlier 'FINAL' wrongly extended a characteristics judgement to an obtainability claim, contradicting §15.6. **PROVISIONAL** for the test set — availability confirmed from the GitHub repo and AIMI, not yet acquired. |
 | **Date** | 16/08/2026 |
 
 ### D202 — Target label
@@ -1510,8 +1761,8 @@ principle but one input is still unverified · **UNKNOWN** = not decidable yet.
 | **Decision** | `Frontal/Lateral == "Frontal"` only. **AP and PA combined** into one training set, with `AP/PA` retained as a metadata column and **test metrics reported stratified by projection**. |
 | **Reason** | Laterals cannot support a cardiothoracic-ratio judgement, and because CheXpert labels are **study-level**, every lateral in a positive study carries a positive label it cannot visually justify. On combining AP/PA: the decisive argument is that **the official expert-annotated test set is mixed-projection**, so a PA-only model could not be evaluated on our strongest ground truth. The AP confound (magnification + inpatient acuity) is real and is handled by **measurement**, not exclusion. |
 | **Evidence** | §2.2 (study-level labelling, Irvin et al.); §4.2 option analysis; official test set composition. |
-| **Confidence** | **FINAL** for frontal-only and for combining. **PROVISIONAL** on the exact AP/PA value set — whether `LL`/`RL` appear is **VERIFY**. |
-| **Date** | 16/08/2026 |
+| **Confidence** | **FINAL** (upgraded 21/08/2026). The last open detail is measured: the `AP/PA` value set is **`AP` 161,590 · `PA` 29,420 · `LL` 16 · `RL` 1**, with blanks confined to laterals. `LL`/`RL` do occur but total **17 images (0.009% of frontals)** — retained as their own category so they surface in stratified reports (§8.3). Frontal AP/PA split measured at **84.59% / 15.40%**, confirming the inpatient-AP skew the confound analysis assumes. |
+| **Date** | 16/08/2026 · AP/PA set measured 21/08/2026 |
 
 ### D205 — Patient split
 
@@ -1520,8 +1771,8 @@ principle but one input is still unverified · **UNKNOWN** = not decidable yet.
 | **Decision** | Split unit = **patient**, never image or study. **Test = the official 500-patient set.** Train/val = **85 / 15** of the official training patients, **stratified** on patient-level any-positive, **seed 42**, via `StratifiedGroupKFold` (20 folds, union 3). Official 200-patient valid set kept as a **secondary expert-labelled check, never tuned on**. Fallback 70/15/15 carve if the test set proves unobtainable. |
 | **Reason** | 64,540 patients contribute 223,414 images (~3.46 each), so image-level splitting puts the same chest in train and test; cardiomegaly is chronic, so memorising the patient *is* memorising the label, and the architecture ranking — the entire point of RQ1 — would degenerate into noise. **70/15/15 was not adopted** because a 5-radiologist consensus test set is far stronger ground truth than anything carvable from NLP-derived labels, and it is the standard benchmark. The official valid set (200 studies, ~30 positives) is too small to tune on. |
 | **Evidence** | Irvin et al. (test annotation protocol, counts); `rajpurkarlab/cheXpert-test-set-labels`; `assert_disjoint` **CONFIRMED passing** on the fixture. |
-| **Confidence** | **PROVISIONAL** — the methodology is FINAL, but the split cannot be produced until `train.csv` exists, and the test-set arm depends on acquiring it. Splits generated before then are provisional and must be regenerated. |
-| **Date** | 16/08/2026 |
+| **Confidence** | **Methodology FINAL; the produced split remains PROVISIONAL** (updated 21/08/2026). The patient-level machinery is now **executed and verified on real data**: `assert_disjoint` passed, and stratification held prevalence to 13.80% / 13.65% / 13.76% across splits (§13.4a). What is still provisional is the **test arm only** — the official 500-patient set is not acquired, so the run fell back to a 70/15/15 carve. The train/val split will survive regeneration; the test split will not. |
+| **Date** | 16/08/2026 · executed and verified 21/08/2026 |
 
 ### D206 — Image size
 
@@ -1560,8 +1811,8 @@ principle but one input is still unverified · **UNKNOWN** = not decidable yet.
 | **Decision** | **One** strategy: `pos_weight` in `torch.nn.BCEWithLogitsLoss`, computed from the **training split only**. Weighted sampling, focal loss and oversampling rejected. Decision threshold selected on **validation**, frozen, then applied once to test. |
 | **Reason** | At ~12.3% positive (~1:7) the imbalance is **moderate**, not severe — severe-imbalance machinery is unwarranted. `pos_weight` adds **zero tunable hyperparameters** and keeps the data pipeline byte-identical across all four architectures, which matters because anything that varies per model confounds RQ1. Focal loss would add α and γ: tuning them per architecture confounds the comparison, not tuning them is arbitrary. Computing `pos_weight` from the full pool would leak val/test prevalence into training. |
 | **Evidence** | §6.3 projected prevalence; §12.2 comparison; `split_manifest.json → pos_weight_from_train`. |
-| **Confidence** | **PROVISIONAL** — the *strategy* is FINAL; the *value* of `pos_weight` is unknown until the real prevalence is measured. |
-| **Date** | 16/08/2026 |
+| **Confidence** | **FINAL** (upgraded 21/08/2026). The strategy was already settled; the value is now **measured**: frontal prevalence **13.76%** at **1 : 6.27**, giving **`pos_weight` = 6.246739** computed from the T1 train split alone and recorded in `split_manifest.json`. The measured imbalance is slightly *milder* than the 1:7.2 projection, so the argument against focal loss and resampling only strengthens. |
+| **Date** | 16/08/2026 · value measured 21/08/2026 |
 
 ### D210 — Dataset subset vs full data
 
@@ -1572,6 +1823,16 @@ principle but one input is still unverified · **UNKNOWN** = not decidable yet.
 | **Evidence** | §14.3 cost model; §15.2 breakdown; subset nesting and prevalence preservation **CONFIRMED by test** (§15.4). |
 | **Confidence** | **PROVISIONAL** — but for one reason only now (updated 21/08/2026). The throughput half is **MEASURED**: four baselines at T1 cost **~5.0 GPU-hours**, against a pre-measurement estimate of ~5.1 h (§14.3). The cost model is confirmed and T1 = 40k is comfortably affordable — in fact conservative, since the measured baseline cost consumes only ~20% of the ~25–30 h budget. What remains open is **non-technical**: the real UROP deadline is still unconfirmed (U17), and T1 sizing is pegged to a 4-week *planning horizon*, not a known deadline. `subset.target_frontal_images` remains the single value to change. **The sampling strategy has deliberately not been altered on the strength of this measurement.** |
 | **Date** | 16/08/2026 · throughput half resolved 21/08/2026 |
+
+### D211 — Primary label source *(new, 21/08/2026)*
+
+| | |
+|---|---|
+| **Decision** | **`train_cheXbert.csv`** (CheXbert-relabelled training set, Smit et al. 2020) is the primary label source, in place of the original rule-based `train.csv` of Irvin et al. 2019. `train_visualCheXbert.csv` is retained as an **optional ablation only** (`dataset.ablation_train_csv`), never the primary. |
+| **Reason** | It is what Stanford AIMI exposes as a standalone metadata download, and it is structurally a drop-in: **measured** to reproduce every published training-set figure exactly (223,414 images / 64,540 patients / 187,641 studies / 191,027 frontal), with all 19 columns and the same four-state encoding. It preserves the task definition, the uncertainty structure D203 rests on, and comparability with the CheXpert literature. CheXbert is also a stronger labeller than the original rule-based system. VisualCheXbert was rejected as primary because at **58.33% frontal prevalence with zero uncertain and zero blank states** it is a *different task*: it would void D203 and invert D209 (`pos_weight` 0.71). |
+| **Evidence** | Direct measurement of both files, 21/08/2026 (§3.3, §6.2). Column/row/patient/study counts verified against Irvin et al. and the CheXpert datasheet. |
+| **Confidence** | **FINAL** — with the provenance caveat stated in §3.3 and required in the report: Irvin Table 3's uncertainty-policy AUCs are *indicative* for this file, not exactly applicable, because they were measured with the original labeller. D203's reasoning strengthens rather than weakens under CheXbert (uncertainty 1.77% vs 3.52%). |
+| **Date** | 21/08/2026 |
 
 ### Supplementary detailed log
 
@@ -1601,17 +1862,18 @@ The granular decisions behind the ten above, retained for traceability:
 Nothing here blocks Stage 3 *planning*; items marked **BLOCKING** block Stage 3
 *execution*.
 
-### 21.1 Resolved by the ~30 MB metadata CSV — **BLOCKING**
+### 21.1 ~~Resolved by the ~30 MB metadata CSV~~ — **ALL RESOLVED 21/08/2026**
 
-| # | Question | Certainty now | Resolved by |
-|---:|---|---|---|
-| U1 | Exact frontal / lateral image counts | VERIFY (~191,027 / 32,387, secondary source) | `analyze_metadata.py` |
-| U2 | The exact `AP/PA` value set — do `LL` / `RL` occur? | VERIFY | `analyze_metadata.py` |
-| U3 | **Image-level** (not study-level) Cardiomegaly counts | UNKNOWN — unpublished | `analyze_metadata.py` |
-| U4 | Usable frontal positive/negative counts under each policy | INFERRED projection only | `analyze_metadata.py` |
-| U5 | Actual images-per-patient distribution | INFERRED (mean ~3.46 only) | `analyze_metadata.py` |
-| U6 | Real `pos_weight` value (D209) | UNKNOWN | `make_splits.py` |
-| U7 | Does the real CSV schema match §2.3? | INFERRED from datasheet | `analyze_metadata.py` (raises if not) |
+| # | Question | Measured answer |
+|---:|---|---|
+| U1 | Exact frontal / lateral image counts | ✅ **191,027 / 32,387** — exact match to the secondary figure |
+| U2 | The exact `AP/PA` value set — do `LL` / `RL` occur? | ✅ **Yes.** `AP` 161,590 · `PA` 29,420 · `LL` 16 · `RL` 1 · blank 32,387 (laterals only) |
+| U3 | **Image-level** Cardiomegaly counts | ✅ pos 30,566 / neg 16,155 / unc 3,917 / blank 172,776 (§3.1a) |
+| U4 | Usable frontal counts per policy | ✅ U-Zeros **26,283 pos / 164,744 neg, 13.76%** (§6.3) |
+| U5 | Images-per-patient distribution | ✅ mean 2.96, **median 1**, max **91**; 49.19% of patients have >1 (§5.1) |
+| U6 | Real `pos_weight` (D209) | ✅ **6.246739** from the T1 train split |
+| U7 | Does the real CSV schema match §2.3? | ✅ All 19 columns present. **One difference:** `No Finding` is last, not first — harmless, all code addresses by name (§3.3) |
+| U27 | *(new)* Which labeller does the acquired file use? | ✅ **CheXbert, not the original rule-based labeller** — D211, §3.3 |
 
 ### 21.2 Resolved by the ~11 GB image download — **BLOCKING for Stage 3 execution**
 
@@ -1629,9 +1891,12 @@ Nothing here blocks Stage 3 *planning*; items marked **BLOCKING** block Stage 3
 | U12 | Can the CheXlocalize test **images** actually be downloaded? | CONFIRMED available; **not yet acquired** |
 | U13 | Does `groundtruth.csv` carry `Path` values that join to those images? | UNKNOWN — the repo documents labels, not the join key |
 | U14 | Test-set frontal/lateral and AP/PA composition | UNKNOWN |
+| U28 | *(new)* Is the official **`valid.csv`** obtainable separately? | **UNKNOWN** — neither acquired CSV contains any validation rows; all 223,414 are `train/`. Needed for the §13.2 secondary expert check, not for training |
 
-If U12 or U13 fail, the **fallback 70/15/15 carve** applies (§13.3) and must be stated
-prominently in the report, since it materially weakens the ground truth.
+**The fallback is currently in force.** `test_set.enabled: false`, so the split produced on
+21/08/2026 is `mode: fallback-carved-test` (70/15/15). This must be stated prominently in
+the report, since it materially weakens the ground truth — the test set is currently
+CheXbert-labelled, not radiologist-adjudicated.
 
 ### 21.4 ~~Resolved by installing `torch`~~ — **RESOLVED 21/08/2026**
 
@@ -1674,30 +1939,36 @@ prominently in the report, since it materially weakens the ground truth.
 | 3 | **Which images?** | **Frontal only** (`Frontal/Lateral == "Frontal"`), **AP and PA combined**, with `AP/PA` retained as metadata and test metrics reported stratified by projection. Laterals excluded — they cannot support a CTR judgement yet inherit study-level positive labels. |
 | 4 | **Which label?** | The **`Cardiomegaly`** column, binarised to `target ∈ {0,1}`. Blank (no mention) → `0`, matching the dataset paper's own accounting. `Support Devices` retained as metadata for the shortcut probe. |
 | 5 | **How are uncertain labels handled?** | **U-Zeros** (`-1.0 → 0`) as primary. **U-Ones** and **exclusion** as reported ablations. **U-MultiClass rejected** — its apparent advantage has fully overlapping CIs on 200 studies and it would break the binary task across six downstream stages. |
-| 6 | **How many usable examples?** | **CONFIRMED (study level):** 23,002 positive / 6,597 uncertain / 158,042 negative of 187,641 studies. **INFERRED (frontal images, U-Zeros):** ~191,000 usable, ~23,400 positive, ~12.3% prevalence. **The image-level figure is a projection, not a measurement** — U1–U4 in §21.1. |
-| 7 | **What split?** | **Patient-level, always.** Test = the official 500-patient 5-radiologist-consensus set. Train/val = **85/15** of official training patients, stratified on patient-level any-positive, **seed 42**. Official 200-patient valid set = secondary expert check, never tuned on. `assert_disjoint` runs before any CSV is written. Fallback 70/15/15 carve only if the test set proves unobtainable. |
+| 6 | **How many usable examples? — MEASURED** | **191,027 usable frontal images** from **64,534 patients**. Under U-Zeros: **26,283 positive / 164,744 negative = 13.76% prevalence, 1 : 6.27**. Study level: 25,840 pos / 3,327 uncertain / 158,474 neg of 187,641. All measured from `train_cheXbert.csv`, 21/08/2026 (§3.1a, §6.3). |
+| 7 | **What split? — EXECUTED** | **Patient-level, always**, seed 42, stratified on patient-level any-positive. `assert_disjoint` **passed on real data**. **Currently in fallback mode (70/15/15)** because the official test set is not acquired: train 13,659 pts / 40,002 imgs (13.80%), val 9,680 pts / 29,380 imgs (13.65%), test 9,682 pts / 28,883 imgs (13.76%). **The intended split is unchanged** — official 500-patient test set + 85/15 train/val — and the test arm **must be regenerated** once that set is obtained (§13.4a). |
 | 8 | **What preprocessing?** | Direct resize to **320 × 320** (no cropping) → replicate grayscale **3×** → `/255` → **ImageNet** normalization. Identical across all four baselines and across train/val/test. CLAHE excluded from core. |
 | 9 | **What augmentation?** | **Train split only.** Rotation ±10°, isotropic zoom 0.9–1.0, translation ±5% with padding, brightness ±10%, contrast ±10%. **No horizontal flip.** No anisotropic aspect jitter — it changes the cardiothoracic ratio, i.e. the label. No shear, elastic, cutout, MixUp or CutMix. No TTA. |
-| 10 | **How is imbalance handled?** | **One** strategy: `pos_weight` in `BCEWithLogitsLoss`, computed from **train only**. At ~1:7 the imbalance is moderate; focal loss and resampling would add confounds without justification. Threshold selected on validation, frozen, applied once to test. **Report PR-AUC with its 0.123 baseline alongside ROC-AUC; never accuracy alone.** |
-| 11 | **Full dataset or subset?** | **Subset — T1 ~40,000 frontal training images**, patient-level stratified, seed 42, for the core comparison. Full pool (T2) only as a stretch scaling check on the top two models. **Validation and test are never subsampled.** Raising `subset.target_frontal_images` is the single change if more time appears; subsets are nested supersets, **CONFIRMED by test**. |
+| 10 | **How is imbalance handled? — MEASURED** | **One** strategy: `pos_weight` in `BCEWithLogitsLoss`, computed from **train only** = **6.246739**. Measured imbalance is **1 : 6.27** (13.76% positive) — moderate, and milder than the 1:7.2 projection, so focal loss and resampling remain unjustified. Threshold selected on validation, frozen, applied once to test. **Report PR-AUC with its baseline — now 0.138, not the projected 0.123 — alongside ROC-AUC; never accuracy alone.** |
+| 11 | **Full dataset or subset? — PRODUCED** | **Subset — T1 delivered at 40,002 frontal training images**, 13,659 patients, **5,520 positives**, prevalence 13.80% (pool 13.76%). Patient-level stratified, seed 42. Full pool (T2) only as a stretch scaling check. **Validation (29,380) and test (28,883) were not subsampled.** Raising `subset.target_frontal_images` is the single change if more time appears; subsets are nested supersets, **CONFIRMED by test**. |
 | 12 | **What hardware?** | **Primary: the local RTX 4060 Laptop (8 GB), i7-13650HX, 31.7 GiB RAM, 301 GB free on `E:`.** All four models **measured** at 320 × 320 with AMP: run every one at **micro-batch 16 with 2 gradient-accumulation steps** (effective batch 32, identical across models per D020), using 1.00–3.80 GiB and leaving >3 GiB headroom. Measured throughput 84.0 / 61.0 / 152.1 / 486.1 img/s. **Critical machine-specific caveat:** Windows CUDA System Memory Fallback is ON, so exceeding VRAM does not error — it silently spills to host RAM at ~10× slowdown (§14.2.1). The recommended config sits well clear of that threshold. Local training also keeps data on-machine, satisfying the RUA. **Backup: Kaggle Notebooks** (16 GB P100, ~30 h/week) — subject to U19. |
-| 13 | **What is still unknown?** | 26 items catalogued in §21. **Blocking:** seven metadata facts needing the ~30 MB CSV (U1–U7), four data-quality facts needing the images (U8–U11), and the test-set join (U12–U14). **Resolved 21/08/2026:** VRAM and throughput (U15–U16), plus a newly found and handled driver quirk (U25). **Non-blocking and open:** the data-loader bottleneck question (U26) and four human answers (U17–U20) — the **actual deadline** (U17) being the most consequential, since it is now the *only* thing keeping D210 provisional. |
-| 14 | **Ready for Stage 3?** | **Methodologically yes; operationally no.** Every design decision is made, justified and recorded; the pipeline is implemented and verified end-to-end on a fixture. But **no CheXpert file has been downloaded**, so no number in §6.3 is measured, no split exists, and D205/D206/D209/D210 remain PROVISIONAL. **Stage 2 closes when the metadata CSV lands and `analyze_metadata.py` + `make_splits.py` have run** — roughly an hour of work once the download is done. Stage 3 must not begin before that. |
+| 13 | **What is still unknown?** | 28 items in §21. **Resolved 21/08/2026:** all metadata facts (U1–U7, U27) and all compute facts (U15–U16, U25). **Still blocking Stage 3 execution:** the four image-dependent data-quality checks (U8–U11 — integrity, dimensions, exact and near duplicates) and the official test set (U12–U14, U28). **Non-blocking:** the data-loader bottleneck (U26) and four human answers (U17–U20), of which the **actual deadline** (U17) is the only thing still keeping D210 provisional. |
+| 14 | **Ready for Stage 3?** | **Not yet — one acquisition away.** The metadata half of Stage 2 is **complete and measured**: labels, views, prevalence, `pos_weight`, patient-level splits and the T1 subset all exist on disk with verified patient-disjointness. Seven of eleven decisions are now FINAL. **Two things remain before Stage 3 opens:** (a) the **T1 images** (§15.6) — without them nothing can train and U8–U11 cannot be checked; (b) the **official test set**, without which the current test split is a CheXbert-labelled fallback rather than radiologist-adjudicated ground truth. Stage 3 must not begin before (a). |
 
 ### Stage 2 status
 
 > **CONDITIONALLY COMPLETE — pending data acquisition.**
 >
-> All analysis, decisions and code are done. Of the ten formal decisions (updated
-> 21/08/2026 after the VRAM probe):
-> **three are FINAL outright** (D202, D203, D208); **four are FINAL in substance with one
-> unverified detail each** (D201 test-set acquisition, D204 the `AP/PA` value set,
-> D207 `direct` vs `aspect_pad`, and **D206 — upgraded, its VRAM half now measured**);
-> and **three remain PROVISIONAL** (D205, D209 pending the metadata CSV; D210 pending
-> only the real deadline, its throughput half now measured). Every provisional item names
-> the script or the answer that will settle it. Stage 2 cannot be declared closed on
-> published values alone, and claiming otherwise would be exactly the kind of unverified
-> assertion this document is structured to prevent.
+> The metadata half of Stage 2 is **complete and measured**. Of the **eleven** formal
+> decisions (updated 21/08/2026 after the VRAM probe and the metadata run):
+>
+> - **Seven FINAL** — D202, D203, D208, **D204** (AP/PA set measured), **D209**
+>   (`pos_weight` = 6.246739 measured), **D211** (label source), and D206 in substance.
+> - **Two FINAL with one unverified detail** — D201 (test set not acquired), D207
+>   (`direct` vs `aspect_pad`, an exposed ablation).
+> - **Two PROVISIONAL** — **D205**: the *methodology* is executed and verified on real
+>   data, but the produced split is in `fallback-carved-test` mode and its **test arm must
+>   be regenerated** once the official set is obtained. **D210**: throughput measured and
+>   T1 delivered, pending only the real deadline (U17).
+>
+> **Stage 2 cannot close yet.** The four image-dependent checks (U8–U11) are untouched
+> because no image has been downloaded, and the test set is currently a CheXbert-labelled
+> fallback rather than radiologist ground truth. Declaring closure now would be exactly the
+> kind of unverified assertion this document is structured to prevent.
 
 ---
 

@@ -4,11 +4,44 @@
 
 dataset:
   name: CheXpert
-  release: CheXpert-v1.0-small          # downsampled JPEG release (~11 GB)
-  # Root directory that CONTAINS train.csv / valid.csv and the train/ valid/ folders.
-  root: E:/UROP/data/raw/CheXpert-v1.0-small
-  train_csv: train.csv
+  release: CheXpert-v1.0-small          # downsampled JPEG release (~11 GB) — images TBD
+  # Directory that CONTAINS the label CSV(s). Images are not here yet.
+  root: E:/UROP
+
+  # PRIMARY LABEL SOURCE — decision D211, 21/08/2026.
+  # This is the CheXbert-relabelled training set (Smit et al. 2020), NOT the original
+  # rule-based CheXpert labeller of Irvin et al. 2019. Same 223,414 images, same
+  # 4-state encoding, same Path/Sex/Age/view columns; different (improved) labels.
+  # Consequence: Irvin Table 3's uncertainty-policy AUCs are indicative for this file,
+  # not exactly applicable. See docs/dataset_analysis.md §3.3.
+  train_csv: train_cheXbert.csv
+
+  # Official 200-patient expert-annotated validation metadata. NOT YET ACQUIRED —
+  # neither downloaded CSV contains any validation rows (all 223,414 are train/).
+  # analyze_metadata.py warns and continues; make_splits.py never reads it.
   valid_csv: valid.csv
+
+  # Optional ablation ONLY — never the primary target. VisualCheXbert predicts
+  # image-derived rather than report-derived labels: 58.33% frontal prevalence vs
+  # 13.76% here, and no uncertain/blank states at all. Swapping it in would silently
+  # void D203 (no uncertainty to police) and invert D209 (pos_weight 0.71).
+  ablation_train_csv: train_visualCheXbert.csv
+
+# --- Image location -----------------------------------------------------------
+# The metadata Path values carry the FULL-release prefix, e.g.
+#     CheXpert-v1.0/train/patient00001/study1/view1_frontal.jpg
+# but the release we intend to use unpacks as `CheXpert-v1.0-small/`. The resolver
+# therefore strips the leading release segment from each Path and re-roots it under
+# images.root / images.release_dir. See chexpert_metadata.resolve_image_path().
+#
+# NOT YET DOWNLOADED — every image-dependent script fails loudly until this exists.
+images:
+  # Directory that CONTAINS the release directory (not the release directory itself).
+  root: E:/UROP/data/raw
+  # Name of the unpacked release directory inside images.root.
+  release_dir: CheXpert-v1.0-small
+  # Subdirectory that must exist inside release_dir for the layout check to pass.
+  expect_subdir: train
 
 # Official expert-annotated test set (500 patients / 668 images).
 # Labels: https://github.com/rajpurkarlab/cheXpert-test-set-labels
