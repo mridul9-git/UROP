@@ -3,6 +3,14 @@
     python src/training/train.py                      # real run (needs images)
     python src/training/train.py --model densenet201
     python src/training/train.py --dry-run            # fixture, no CheXpert needed
+    python src/training/train.py --resume <run>/checkpoints/best.pt
+
+Resume is explicit and never automatic. `--resume` continues an existing run
+IN PLACE: it reuses that run's directory and its config_snapshot.yaml (so the
+methodology cannot drift), restores model/optimizer/scheduler/scaler and the
+best-metric bookkeeping, and starts at checkpoint_epoch + 1 against the SAME
+total epoch budget. The original run_manifest.json and config_snapshot.yaml are
+never rewritten; a resume writes its own record under <run>/resumes/.
 
 Order of operations is deliberate. Everything that can fail cheaply fails before
 anything expensive happens: config validation, split loading, patient-disjointness,
@@ -18,7 +26,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
@@ -28,7 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src" / "training"))
 sys.path.insert(0, str(REPO_ROOT / "src" / "data"))
 
-from checkpoint import CheckpointManager  # noqa: E402
+from checkpoint import CheckpointManager, load_checkpoint  # noqa: E402
 from config import (  # noqa: E402
     effective_batch, load_data_config, load_train_config, snapshot_config,
     validate_train_config,
@@ -59,6 +69,33 @@ def _loader(ds, batch_size: int, shuffle: bool, cfg: dict, generator=None):
     )
 
 
+def _resume_run_dir(ckpt_path: Path) -> Path:
+    """The run directory a checkpoint belongs to: <run>/checkpoints/<file>.
+
+    Validated rather than assumed, because resuming into the wrong directory
+    would append this run's epochs to another run's provenance.
+    """
+    if ckpt_path.suffix == ".tmp" or ckpt_path.name.endswith(".pt.tmp"):
+        raise ValueError(
+            f"Refusing to resume from {ckpt_path.name}: a .tmp file is a "
+            f"partially written checkpoint, not a valid one."
+        )
+    if not ckpt_path.is_file():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+    if ckpt_path.parent.name != "checkpoints":
+        raise ValueError(
+            f"Expected the checkpoint to live in <run_dir>/checkpoints/, "
+            f"got {ckpt_path.parent}"
+        )
+    run_dir = ckpt_path.parent.parent
+    if not (run_dir / "run_manifest.json").exists():
+        raise FileNotFoundError(
+            f"{run_dir} has no run_manifest.json, so it is not a run directory "
+            f"this resume can continue."
+        )
+    return run_dir
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", default=None, help="path to train.yaml")
@@ -73,7 +110,35 @@ def main() -> int:
                     help="score the test split ONCE at the end, at the "
                          "validation-selected threshold")
     ap.add_argument("--device", default=None, help="cuda | cpu (default: auto)")
+    ap.add_argument("--resume", default=None, metavar="CHECKPOINT",
+                    help="continue an interrupted run from this checkpoint. "
+                         "Never automatic: without this flag a run always "
+                         "starts from epoch 1 in a fresh run directory.")
     args = ap.parse_args()
+
+    resume_path = Path(args.resume).resolve() if args.resume else None
+    resume_run_dir = _resume_run_dir(resume_path) if resume_path else None
+
+    if resume_run_dir is not None:
+        if args.dry_run:
+            raise ValueError("--resume and --dry-run are mutually exclusive")
+        # Hyperparameter overrides are refused on resume rather than merged:
+        # changing epochs would change the cosine T_max, changing seed or model
+        # would make the restored optimizer/scheduler state meaningless.
+        blocked = [n for n, v in (("--model", args.model),
+                                  ("--epochs", args.epochs),
+                                  ("--seed", args.seed)) if v is not None]
+        if blocked:
+            raise ValueError(
+                f"{', '.join(blocked)} cannot be combined with --resume: the "
+                f"resumed run must use the original run's settings verbatim."
+            )
+        # Read the ORIGINAL run's snapshot, not the current config/train.yaml,
+        # so a later edit to config/train.yaml cannot silently alter this run.
+        snap = resume_run_dir / "config_snapshot.yaml"
+        if args.config is None and snap.exists():
+            args.config = str(snap)
+            print(f"[RESUME] config from the original run: {snap}")
 
     cfg = load_train_config(args.config)
     if args.model:
@@ -154,8 +219,12 @@ def main() -> int:
           f"out_shape={shape}")
 
     # --- run directory + manifest ---------------------------------------
-    run_dir = make_run_dir(cfg["experiment"]["output_root"], cfg["experiment"]["name"],
-                           cfg["model"]["name"], seed, fixture=fixture)
+    # A resume continues the ORIGINAL directory. make_run_dir() is skipped so
+    # the resumed epochs land beside the epochs they continue.
+    run_dir = resume_run_dir or make_run_dir(
+        cfg["experiment"]["output_root"], cfg["experiment"]["name"],
+        cfg["model"]["name"], seed, fixture=fixture,
+    )
     split_files = {
         name: {
             "path": str(st["csv"]),
@@ -177,8 +246,19 @@ def main() -> int:
         "train": describe_transform(train_ds.transform),
         "eval": describe_transform(val_ds.transform),
     }
-    write_json(run_dir / "run_manifest.json", run_manifest)
-    snapshot_config(cfg, run_dir / "config_snapshot.yaml")
+    if resume_run_dir is None:
+        write_json(run_dir / "run_manifest.json", run_manifest)
+        snapshot_config(cfg, run_dir / "config_snapshot.yaml")
+    else:
+        # Requirement: the original run's provenance is immutable. The resume
+        # gets its own dated pair alongside it, never an overwrite.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        resume_dir = run_dir / "resumes"
+        resume_dir.mkdir(parents=True, exist_ok=True)
+        write_json(resume_dir / f"run_manifest__{stamp}.json", run_manifest)
+        snapshot_config(cfg, resume_dir / f"config_snapshot__{stamp}.yaml")
+        print(f"[RESUME] resume provenance -> {resume_dir} (stamp {stamp}); "
+              f"original run_manifest.json / config_snapshot.yaml untouched")
     print(f"{tag}run dir: {run_dir}")
 
     # --- loaders / optimizer --------------------------------------------
@@ -206,13 +286,117 @@ def main() -> int:
         "pos_weight": pos_weight, "fixture": fixture,
     }
 
+    # --- resume ----------------------------------------------------------
+    start_epoch, start_bad_epochs, resume_record, resume_stamp = 1, 0, None, None
+    if resume_path is not None:
+        ck_payload = load_checkpoint(
+            resume_path, model=model, optimizer=optimizer, scheduler=scheduler,
+            scaler=scaler, restore_rng=True, map_location="cpu", strict=True,
+        )
+
+        # The checkpoint must belong to the run we are about to continue. A
+        # mismatch here means the restored optimizer state describes a different
+        # experiment, which would corrupt the result silently.
+        ck_prov = ck_payload.get("provenance") or {}
+        for key, live in (("seed", seed), ("model", cfg["model"]["name"])):
+            if ck_prov.get(key) is not None and ck_prov[key] != live:
+                raise ValueError(
+                    f"Checkpoint provenance {key}={ck_prov[key]!r} does not "
+                    f"match this run's {key}={live!r}."
+                )
+        ck_pw = ck_prov.get("pos_weight")
+        if ck_pw is not None and abs(float(ck_pw) - float(pos_weight)) > 1e-6:
+            raise ValueError(
+                f"Checkpoint pos_weight={ck_pw} != resolved pos_weight="
+                f"{pos_weight}. The loss would not be the loss the restored "
+                f"optimizer state was produced under."
+            )
+
+        ckpt_epoch = int(ck_payload["epoch"])
+        best_metric = ck_payload.get("best_metric")
+        best_epoch = ck_payload.get("best_epoch")
+        ckpt.load_state(best_metric, best_epoch)
+
+        start_epoch = ckpt_epoch + 1
+        # Patience already consumed: epochs completed since the best one. For a
+        # checkpoint whose epoch IS the best epoch this is 0, as it must be.
+        start_bad_epochs = (
+            max(0, ckpt_epoch - int(best_epoch)) if best_epoch is not None else 0
+        )
+
+        # best.pt becomes writable again by CheckpointManager from here on. Keep
+        # an immutable copy of the state we resumed from; nothing is deleted.
+        resume_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup = (
+            resume_path.parent
+            / f"pre_resume__{resume_path.stem}__epoch{ckpt_epoch}__{resume_stamp}.pt"
+        )
+        if not backup.exists():
+            shutil.copy2(resume_path, backup)
+
+        resume_record = {
+            "resumed": True,
+            "resumed_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "resumed_from_checkpoint": str(resume_path),
+            "resumed_from_checkpoint_bytes": resume_path.stat().st_size,
+            "preserved_copy": str(backup),
+            "checkpoint_epoch": ckpt_epoch,
+            "start_epoch": start_epoch,
+            "total_epochs": int(cfg["train"]["epochs"]),
+            "remaining_epochs": int(cfg["train"]["epochs"]) - start_epoch + 1,
+            "restored_best_metric": best_metric,
+            "restored_best_epoch": best_epoch,
+            "restored_early_stopping_bad_epochs": start_bad_epochs,
+            "restored": {
+                "model": True,
+                "optimizer": bool(ck_payload.get("optimizer_state")),
+                "scheduler": bool(ck_payload.get("scheduler_state")),
+                "scaler": bool(ck_payload.get("scaler_state")),
+                "rng": ck_payload.get("rng_restored") or [],
+            },
+            "rng_state_present_in_checkpoint": bool(
+                ck_payload.get("rng_state_present")
+            ),
+            "checkpoint_provenance": ck_prov,
+            "config_source": cfg.get("_config_path"),
+            "prior_epoch_history_recoverable": False,
+        }
+        if not resume_record["rng_state_present_in_checkpoint"]:
+            resume_record["rng_caveat"] = (
+                "This checkpoint predates RNG-state capture. Data order and "
+                "augmentation for the resumed epochs come from set_seed(seed) "
+                "rather than from the interrupted run's RNG stream, so the "
+                "resumed epochs are NOT bit-identical to an uninterrupted run. "
+                "Model/optimizer/scheduler/scaler state is restored exactly."
+            )
+        write_json(run_dir / "resumes" / f"resume__{resume_stamp}.json",
+                   resume_record)
+
+        es_patience = (cfg["train"].get("early_stopping") or {}).get("patience")
+        restored_names = [k for k, v in resume_record["restored"].items() if v]
+        print(f"[RESUME] from {resume_path}")
+        print(f"[RESUME] restored epoch={ckpt_epoch} "
+              f"best_{ckpt.monitor}={best_metric} best_epoch={best_epoch}")
+        print(f"[RESUME] restored components={restored_names}")
+        print(f"[RESUME] rng restored={resume_record['restored']['rng'] or 'NONE'} "
+              f"(present in checkpoint: "
+              f"{resume_record['rng_state_present_in_checkpoint']})")
+        print(f"[RESUME] preserved copy -> {backup.name}")
+        print(f"[RESUME] starting at epoch {start_epoch} of "
+              f"{cfg['train']['epochs']} "
+              f"({resume_record['remaining_epochs']} remaining), "
+              f"early-stopping bad_epochs={start_bad_epochs}/{es_patience}")
+
     # --- train -----------------------------------------------------------
     result = fit(model, train_loader=train_loader, val_loader=val_loader,
                  criterion=criterion, optimizer=optimizer, scheduler=scheduler,
                  scaler=scaler, device=device, cfg=cfg, ckpt_manager=ckpt,
-                 provenance=provenance, run_dir=run_dir, fixture=fixture)
+                 provenance=provenance, run_dir=run_dir, fixture=fixture,
+                 start_epoch=start_epoch, start_bad_epochs=start_bad_epochs)
 
     payload = {"run_manifest": str(run_dir / "run_manifest.json"), **result}
+    if resume_record is not None:
+        payload["resume"] = resume_record
 
     # --- test, once, at the validation threshold -------------------------
     if args.eval_test:
@@ -222,7 +406,14 @@ def main() -> int:
         )
         thr = (best_epoch_val or {}).get("threshold")
         if thr is None:
-            raise RuntimeError("no validation threshold available for test scoring")
+            raise RuntimeError(
+                f"no validation threshold available for test scoring: best "
+                f"epoch is {result['best_epoch']}, which is not among the "
+                f"epochs this process ran ({start_epoch}..). On a resumed run "
+                f"whose best epoch predates the resume the threshold was not "
+                f"carried in the checkpoint - re-evaluate validation rather "
+                f"than substituting a different threshold."
+            )
         print(f"{tag}scoring TEST once at the validation-selected threshold {thr:.4f}")
         test_loader = _loader(test_ds, micro, False, cfg)
         test_metrics = evaluate(
@@ -238,8 +429,15 @@ def main() -> int:
             print(f"{tag}CAVEAT: {test_metrics['ground_truth_caveat']}")
         payload["test"] = test_metrics
 
-    write_json(run_dir / "metrics.json", payload)
-    print(f"{tag}wrote {run_dir / 'metrics.json'}")
+    # A resume never overwrites a completed run's metrics.json.
+    metrics_path = run_dir / "metrics.json"
+    if resume_record is not None and metrics_path.exists():
+        metrics_path = (
+            run_dir / "resumes"
+            / f"metrics__from_epoch{start_epoch}__{resume_stamp}.json"
+        )
+    write_json(metrics_path, payload)
+    print(f"{tag}wrote {metrics_path}")
 
     if fixture:
         print("=" * 72)

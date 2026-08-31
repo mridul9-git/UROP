@@ -5,7 +5,7 @@
 **Date:** 16/08/2026  
 **Status:** Stage 1 approved for transition to Stage 2
 
-> This document is the audited working version of Claude's original `literature_review.md`. The original remains the research archive; this version contains the corrections and scope reductions agreed after audit.
+> This document is the audited working version of the original `literature_review.md`. The original remains the research archive; this version contains the corrections and scope reductions agreed after audit.
 
 ## 1. Executive Summary
 
@@ -414,7 +414,7 @@ Only then should the preprocessing/training pipeline be implemented.
 
 # APPROVED WITH AUDIT CORRECTIONS
 
-The original Claude `literature_review.md` remains the **research archive**.
+The original `literature_review.md` remains the **research archive**.
 
 This v2 is the **working methodology document**.
 

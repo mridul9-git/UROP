@@ -1,0 +1,59 @@
+# UROP — repository ignore rules
+#
+# Scope note: artifacts/stage2/ and artifacts/stage3/ are deliberately NOT
+# blanket-ignored. Small provenance manifests, metrics and experiment records
+# under them are intentional project work and must stay trackable. Only the
+# specific large or regenerable files named below are excluded.
+
+# --- Dataset -----------------------------------------------------------------
+# The image corpus and the label metadata are governed by a research-use
+# agreement. They are never redistributed through this repository.
+data/
+train_cheXbert.csv
+train_visualCheXbert.csv
+
+# --- Checkpoints and partial writes ------------------------------------------
+# Model weights are hundreds of MB each and are reproducible from the manifests
+# that ARE tracked. *.tmp catches the partial file an interrupted atomic write
+# leaves behind.
+*.pt
+*.pth
+*.tmp
+
+# --- Python / local environment ----------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.env
+.venv/
+venv/
+*.egg-info/
+
+# --- Local agent / editor state ----------------------------------------------
+.claude/
+.vscode/
+.idea/
+
+# --- Logs ---------------------------------------------------------------------
+*.log
+
+# --- Known large or regenerable reports ---------------------------------------
+# Both are outputs of scripts in src/data/ and can be regenerated on demand.
+# duplicates_near_crosspatient.csv is ~540 MB, which exceeds GitHub's 100 MB
+# per-file limit outright.
+artifacts/stage2/reports/duplicates_near_crosspatient.csv
+artifacts/stage2/reports/image_validation_full.csv
+
+# --- Fixture / dry-run experiment directories ---------------------------------
+# Synthetic smoke-test runs. Never real experiments, and some embed local
+# temp-directory paths.
+artifacts/stage3/runs/FIXTURE__*/
+
+# --- OS noise -----------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -202,8 +202,16 @@ def evaluate(model, loader, device, *, threshold: float | None = None,
 
 def fit(model, *, train_loader, val_loader, criterion, optimizer, scheduler,
         scaler, device, cfg: dict, ckpt_manager, provenance: dict,
-        run_dir: Path, fixture: bool = False) -> dict:
-    """Full training loop with early stopping and per-epoch checkpointing."""
+        run_dir: Path, fixture: bool = False, start_epoch: int = 1,
+        start_bad_epochs: int = 0) -> dict:
+    """Full training loop with early stopping and per-epoch checkpointing.
+
+    `start_epoch` and `start_bad_epochs` exist only for resume. On a fresh run
+    they are 1 and 0, which is exactly the previous behaviour. On a resume they
+    carry the epoch counter and the early-stopping patience counter across the
+    interruption, so the 1..epochs budget is a total budget rather than one that
+    silently restarts.
+    """
     t = cfg["train"]
     epochs = int(t["epochs"])
     accum = int(t["accum_steps"])
@@ -216,10 +224,16 @@ def fit(model, *, train_loader, val_loader, criterion, optimizer, scheduler,
     es_min_delta = float(es.get("min_delta", 0.0))
 
     ev = cfg["eval"]
-    history, bad_epochs = [], 0
+    history, bad_epochs = [], int(start_bad_epochs)
     tag = "[FIXTURE] " if fixture else ""
 
-    for epoch in range(1, epochs + 1):
+    if start_epoch > epochs:
+        raise ValueError(
+            f"start_epoch={start_epoch} exceeds train.epochs={epochs}: the "
+            f"budget is already spent, there is nothing to run."
+        )
+
+    for epoch in range(int(start_epoch), epochs + 1):
         print(f"{tag}epoch {epoch}/{epochs}")
         tr = train_one_epoch(
             model, train_loader, criterion, optimizer, scaler, device,
@@ -273,4 +287,5 @@ def fit(model, *, train_loader, val_loader, criterion, optimizer, scheduler,
         "best_epoch": ckpt_manager.best_epoch,
         "monitor": ckpt_manager.monitor,
         "epochs_run": len(history),
+        "start_epoch": int(start_epoch),
     }

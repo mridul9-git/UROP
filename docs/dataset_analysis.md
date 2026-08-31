@@ -21,7 +21,10 @@ Every factual claim carries a certainty label:
 Sections 3, 4, 10, 11, 12, 13 and 15 explicitly separate **WHAT THE DATASET SAYS**
 from **WHAT WE RECOMMEND**.
 
-**Nothing has been downloaded.** No dataset file exists on this machine. Everything
+**SUPERSEDED (16/08/2026 -> 30/08/2026).** ~~**Nothing has been downloaded.** No dataset
+file exists on this machine.~~ Metadata was acquired 21/08/2026, and the image trees plus
+the official validation metadata on 30/08/2026. The sentence is retained to show what was
+true when this document was written. Everything
 below §6 that requires the actual data is implemented as runnable code and marked
 VERIFY; the numbers in the tables are the published expectations that the code will
 either confirm or contradict.
@@ -1530,7 +1533,9 @@ consumes the entire budget on four numbers.
 
 ## 16. Step 16 — The data pipeline
 
-**Design only. No CNN training code is written at this stage.**
+**SUPERSEDED (16/08/2026 -> 30/08/2026).** ~~Design only. No CNN training code is written
+at this stage.~~ The Stage 3 training pipeline now exists and has run end-to-end on real
+data; see `docs/flow.md` section 8 and `docs/experiments.md`.
 
 ```text
 Raw Dataset  (CheXpert-v1.0-small + official test set)
@@ -1706,8 +1711,8 @@ example images, and the post-split composition against real files.
 | 1 | Redivis account + accept the Stanford RUA | you | everything |
 | ~~2~~ | ~~Download the metadata CSV~~ | — | ✅ **DONE 21/08/2026** — `train_cheXbert.csv` acquired (D211); note `valid.csv` was **not** available and remains outstanding (U28) |
 | ~~3~~ | ~~Run `analyze_metadata.py` and `make_splits.py`~~ | — | ✅ **DONE 21/08/2026** — U1–U7, U27 resolved |
-| 4 | Approve the ~11 GB image download | you | Steps 7, 8, 9 |
-| 5 | Acquire the official test set (labels + CheXlocalize images) | you | the §13.2 split; can wait until Stage 3 |
+| ~~4~~ | ~~Approve the ~11 GB image download~~ | — | ✅ **DONE 30/08/2026** — image trees on disk; Steps 7, 8, 9 executed; U8–U11 resolved |
+| 5 | Acquire the official test set (labels + CheXlocalize images) | you | the §13.2 test arm. **STILL OUTSTANDING 31/08/2026** — the test split remains a fallback carve |
 | ~~6~~ | ~~`pip install torch` + run `probe_vram.py`~~ | — | ✅ **DONE 21/08/2026** — §14.2/§14.3 now measured |
 
 Steps 3 and 6 need no approval and no images — 6 can run right now if you want the real
@@ -1731,7 +1736,7 @@ principle but one input is still unverified · **UNKNOWN** = not decidable yet.
 | **Decision** | **CheXpert v1.0, `CheXpert-v1.0-small`** (~11 GB), plus the official 500-patient test set (labels from `rajpurkarlab/cheXpert-test-set-labels`, images from CheXlocalize). Full 440 GB release and CheXpert Plus (DICOM) rejected. |
 | **Reason** | Its native short side is **320 px** — exactly our input size (D206), so the full release would be downsampled to 320 anyway at 40× the storage. Already 8-bit grayscale JPEG, avoiding the DICOM windowing decisions CheXpert Plus would force, which are a research project in themselves and not one of our research questions. |
 | **Evidence** | CheXpert datasheet arXiv:2105.03020 (release sizes and resolutions); Irvin et al. 2019; Stanford AIMI / Redivis portal. |
-| **Confidence** | **Corrected 21/08/2026.** The *preference* for the small release is **FINAL** — its 320 px native short side and 8-bit JPEG encoding are confirmed by the datasheet and are the reasons to want it. Its **availability is UNKNOWN**: no download source for the small-release images has ever been verified. The earlier 'FINAL' wrongly extended a characteristics judgement to an obtainability claim, contradicting §15.6. **PROVISIONAL** for the test set — availability confirmed from the GitHub repo and AIMI, not yet acquired. |
+| **Confidence** | **Updated 30/08/2026.** The *preference* for the small release is **FINAL** — its 320 px native short side and 8-bit JPEG encoding are confirmed by the datasheet and are the reasons to want it. **Availability: SUPERSEDED.** ~~Its availability is UNKNOWN: no download source for the small-release images has ever been verified.~~ An image archive matching the small-release layout (`train/`, `valid/`, `train.csv`, `valid.csv`) was obtained and extracted on 30/08/2026, and all 40,002 / 29,380 / 28,883 split paths resolve against it. **The provenance of that copy is INFERRED from structure, not independently established** — see `docs/research.md` section 8; checksum against a first-party release before publication. The earlier 'FINAL' wrongly extended a characteristics judgement to an obtainability claim, and that correction stands as a lesson. **STILL PROVISIONAL** for the test set — availability confirmed from the GitHub repo and AIMI, **not yet acquired**. |
 | **Date** | 16/08/2026 |
 
 ### D202 — Target label
@@ -1771,7 +1776,7 @@ principle but one input is still unverified · **UNKNOWN** = not decidable yet.
 | **Decision** | Split unit = **patient**, never image or study. **Test = the official 500-patient set.** Train/val = **85 / 15** of the official training patients, **stratified** on patient-level any-positive, **seed 42**, via `StratifiedGroupKFold` (20 folds, union 3). Official 200-patient valid set kept as a **secondary expert-labelled check, never tuned on**. Fallback 70/15/15 carve if the test set proves unobtainable. |
 | **Reason** | 64,540 patients contribute 223,414 images (~3.46 each), so image-level splitting puts the same chest in train and test; cardiomegaly is chronic, so memorising the patient *is* memorising the label, and the architecture ranking — the entire point of RQ1 — would degenerate into noise. **70/15/15 was not adopted** because a 5-radiologist consensus test set is far stronger ground truth than anything carvable from NLP-derived labels, and it is the standard benchmark. The official valid set (200 studies, ~30 positives) is too small to tune on. |
 | **Evidence** | Irvin et al. (test annotation protocol, counts); `rajpurkarlab/cheXpert-test-set-labels`; `assert_disjoint` **CONFIRMED passing** on the fixture. |
-| **Confidence** | **Methodology FINAL; the produced split remains PROVISIONAL** (updated 21/08/2026). The patient-level machinery is now **executed and verified on real data**: `assert_disjoint` passed, and stratification held prevalence to 13.80% / 13.65% / 13.76% across splits (§13.4a). What is still provisional is the **test arm only** — the official 500-patient set is not acquired, so the run fell back to a 70/15/15 carve. The train/val split will survive regeneration; the test split will not. |
+| **Confidence** | **Methodology FINAL; the produced split remains PROVISIONAL** (re-confirmed 31/08/2026). The patient-level machinery is **executed and verified on real data**: `assert_disjoint` passed, and stratification held prevalence to 13.80% / 13.65% / 13.76% across splits (§13.4a). Patient-disjointness was re-asserted at training time on 30–31/08/2026 and held. What is still provisional is the **test arm only** — the official 500-patient set is **still not acquired**, so the run fell back to a 70/15/15 carve. The train/val split will survive regeneration; the test split will not, which is one reason **it has never been evaluated**. The official 200-patient valid set arrived on 30/08/2026 and was used on 31/08/2026 exactly as this decision specifies: a secondary expert-labelled check, with the threshold inherited from the carved validation split and **not** re-tuned. |
 | **Date** | 16/08/2026 · executed and verified 21/08/2026 |
 
 ### D206 — Image size
@@ -1875,14 +1880,18 @@ Nothing here blocks Stage 3 *planning*; items marked **BLOCKING** block Stage 3
 | U7 | Does the real CSV schema match §2.3? | ✅ All 19 columns present. **One difference:** `No Finding` is last, not first — harmless, all code addresses by name (§3.3) |
 | U27 | *(new)* Which labeller does the acquired file use? | ✅ **CheXbert, not the original rule-based labeller** — D211, §3.3 |
 
-### 21.2 Resolved by the ~11 GB image download — **BLOCKING for Stage 3 execution**
+### 21.2 ~~Resolved by the ~11 GB image download~~ — **ALL RESOLVED 30/08/2026**
+
+**No longer blocking.** The images were obtained on 30/08/2026 and all four image-dependent
+checks executed. Reports: `artifacts/stage2/reports/image_validation.md`,
+`artifacts/stage2/reports/duplicates.md`, and the accompanying CSVs.
 
 | # | Question | Certainty now | Resolved by |
 |---:|---|---|---|
-| U8 | Exact dimension / aspect-ratio distribution | INFERRED (short side 320) | `validate_images.py` |
-| U9 | Count of corrupted / missing / unreadable files | UNKNOWN | `validate_images.py` |
-| U10 | Exact-duplicate count, and any **cross-patient** duplicates | UNKNOWN | `find_duplicates.py` |
-| U11 | Cross-patient near-duplicates | UNKNOWN | `find_duplicates.py --near` |
+| U8 | Exact dimension / aspect-ratio distribution | ✅ **MEASURED** — `image_validation.md`, `image_dimensions.png` | `validate_images.py` |
+| U9 | Count of corrupted / missing / unreadable files | ✅ **MEASURED** — `excluded_images.csv`; **0 rows excluded from any split** at training time | `validate_images.py` |
+| U10 | Exact-duplicate count, and any **cross-patient** duplicates | ✅ **MEASURED** — `duplicates_exact.csv` | `find_duplicates.py` |
+| U11 | Cross-patient near-duplicates | ✅ **MEASURED** — `duplicates_near_crosspatient.csv` | `find_duplicates.py --near` |
 
 ### 21.3 Resolved by acquiring the official test set — **BLOCKING for D205**
 
@@ -1891,12 +1900,17 @@ Nothing here blocks Stage 3 *planning*; items marked **BLOCKING** block Stage 3
 | U12 | Can the CheXlocalize test **images** actually be downloaded? | CONFIRMED available; **not yet acquired** |
 | U13 | Does `groundtruth.csv` carry `Path` values that join to those images? | UNKNOWN — the repo documents labels, not the join key |
 | U14 | Test-set frontal/lateral and AP/PA composition | UNKNOWN |
-| U28 | *(new)* Is the official **`valid.csv`** obtainable separately? | **UNKNOWN** — neither acquired CSV contains any validation rows; all 223,414 are `train/`. Needed for the §13.2 secondary expert check, not for training |
+| U28 | *(new)* Is the official **`valid.csv`** obtainable separately? | ✅ **RESOLVED 30/08/2026** — `valid.csv` and the `valid/` image tree arrived with the image archive. 234 rows / 200 patients / 202 frontal / 32 lateral; exact 1:1 CSV-to-file match; all 14 observation columns contain only `0.0`/`1.0`. Used 31/08/2026 for the §13.2 secondary expert check. **Provenance caveat: the structure is CONFIRMED; that this copy is the first-party expert-adjudicated release is INFERRED, not independently established** — see `docs/research.md` section 8 |
 
-**The fallback is currently in force.** `test_set.enabled: false`, so the split produced on
-21/08/2026 is `mode: fallback-carved-test` (70/15/15). This must be stated prominently in
-the report, since it materially weakens the ground truth — the test set is currently
-CheXbert-labelled, not radiologist-adjudicated.
+**The fallback is STILL in force (confirmed 31/08/2026).** `test_set.enabled: false`, so
+the split produced on 21/08/2026 is `mode: fallback-carved-test` (70/15/15). This must be
+stated prominently in the report, since it materially weakens the ground truth — the test
+set is CheXbert-labelled, not radiologist-adjudicated.
+
+> **The carved test split has never been evaluated** (confirmed 31/08/2026). It will be
+> scored once, after the model set is frozen. U12–U14 remain open; acquiring the official
+> 500-patient test set would upgrade the test arm and is the single largest outstanding
+> improvement to the project's evidence quality.
 
 ### 21.4 ~~Resolved by installing `torch`~~ — **RESOLVED 21/08/2026**
 
@@ -1947,11 +1961,19 @@ CheXbert-labelled, not radiologist-adjudicated.
 | 11 | **Full dataset or subset? — PRODUCED** | **Subset — T1 delivered at 40,002 frontal training images**, 13,659 patients, **5,520 positives**, prevalence 13.80% (pool 13.76%). Patient-level stratified, seed 42. Full pool (T2) only as a stretch scaling check. **Validation (29,380) and test (28,883) were not subsampled.** Raising `subset.target_frontal_images` is the single change if more time appears; subsets are nested supersets, **CONFIRMED by test**. |
 | 12 | **What hardware?** | **Primary: the local RTX 4060 Laptop (8 GB), i7-13650HX, 31.7 GiB RAM, 301 GB free on `E:`.** All four models **measured** at 320 × 320 with AMP: run every one at **micro-batch 16 with 2 gradient-accumulation steps** (effective batch 32, identical across models per D020), using 1.00–3.80 GiB and leaving >3 GiB headroom. Measured throughput 84.0 / 61.0 / 152.1 / 486.1 img/s. **Critical machine-specific caveat:** Windows CUDA System Memory Fallback is ON, so exceeding VRAM does not error — it silently spills to host RAM at ~10× slowdown (§14.2.1). The recommended config sits well clear of that threshold. Local training also keeps data on-machine, satisfying the RUA. **Backup: Kaggle Notebooks** (16 GB P100, ~30 h/week) — subject to U19. |
 | 13 | **What is still unknown?** | 28 items in §21. **Resolved 21/08/2026:** all metadata facts (U1–U7, U27) and all compute facts (U15–U16, U25). **Still blocking Stage 3 execution:** the four image-dependent data-quality checks (U8–U11 — integrity, dimensions, exact and near duplicates) and the official test set (U12–U14, U28). **Non-blocking:** the data-loader bottleneck (U26) and four human answers (U17–U20), of which the **actual deadline** (U17) is the only thing still keeping D210 provisional. |
-| 14 | **Ready for Stage 3?** | **Not yet — one acquisition away.** The metadata half of Stage 2 is **complete and measured**: labels, views, prevalence, `pos_weight`, patient-level splits and the T1 subset all exist on disk with verified patient-disjointness. Seven of eleven decisions are now FINAL. **Two things remain before Stage 3 opens:** (a) the **T1 images** (§15.6) — without them nothing can train and U8–U11 cannot be checked; (b) the **official test set**, without which the current test split is a CheXbert-labelled fallback rather than radiologist-adjudicated ground truth. Stage 3 must not begin before (a). |
+| 14 | **Ready for Stage 3?** | ✅ **YES — Stage 3 is OPEN and in progress (updated 31/08/2026).** **SUPERSEDED:** ~~Not yet — one acquisition away.~~ Condition (a), the T1 images, was satisfied on 30/08/2026 and U8–U11 are measured. Condition (b), the **official test set, remains outstanding** — the test arm is still a CheXbert-labelled fallback carve and must never be described as radiologist-adjudicated. That does not block Stage 3, because the test split is not touched during training. The first baseline (ResNet152) completed 31/08/2026; see `docs/experiments.md`. |
 
 ### Stage 2 status
 
-> **CONDITIONALLY COMPLETE — pending data acquisition.**
+> **COMPLETE (30/08/2026).** Stage 3 is open and in progress.
+>
+> **SUPERSEDED status, retained:** ~~CONDITIONALLY COMPLETE — pending data acquisition.~~
+> That was accurate from 21/08/2026 until the images arrived on 30/08/2026. The four
+> image-dependent checks (U8–U11) have since run, and `valid.csv` (U28) was obtained.
+>
+> **What is still NOT closed:** the official 500-patient test set (U12–U14) has not been
+> acquired, so **D205 remains PROVISIONAL** and the test arm is a fallback carve. The
+> carved test split has **never been evaluated**.
 >
 > The metadata half of Stage 2 is **complete and measured**. Of the **eleven** formal
 > decisions (updated 21/08/2026 after the VRAM probe and the metadata run):
@@ -1965,10 +1987,13 @@ CheXbert-labelled, not radiologist-adjudicated.
 >   be regenerated** once the official set is obtained. **D210**: throughput measured and
 >   T1 delivered, pending only the real deadline (U17).
 >
-> **Stage 2 cannot close yet.** The four image-dependent checks (U8–U11) are untouched
-> because no image has been downloaded, and the test set is currently a CheXbert-labelled
-> fallback rather than radiologist ground truth. Declaring closure now would be exactly the
-> kind of unverified assertion this document is structured to prevent.
+> **SUPERSEDED (21/08/2026 -> 30/08/2026):** ~~Stage 2 cannot close yet. The four
+> image-dependent checks (U8–U11) are untouched because no image has been downloaded.~~
+> The images arrived on 30/08/2026 and all four checks have run.
+>
+> **What remains true:** the test set is a CheXbert-labelled fallback rather than
+> radiologist ground truth. That is a permanent caveat on every test result this project
+> produces unless the official test set is obtained.
 
 ---
 

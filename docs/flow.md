@@ -1,9 +1,13 @@
 # Execution Flow — actual codebase
 
-**Last updated:** 21/08/2026 · **Stage:** 2
+**Last updated:** 31/08/2026 · **Stage:** 3
 
-Documents **only functions and classes that exist in the repository today**. No training,
-model, optimisation or XAI code has been written, so none is described here.
+Documents **only functions and classes that exist in the repository today**.
+
+> **SUPERSEDED (21/08/2026 -> 30/08/2026):** ~~No training, model, optimisation or XAI
+> code has been written, so none is described here.~~ The Stage 3 training and evaluation
+> code now exists and has run on real data — see section 8. Hyperparameter-optimisation
+> and XAI code still does not exist and is still not described here.
 
 Certainty: **CONFIRMED** = read from the source and executed · **INFERRED** = follows from
 confirmed behaviour · **UNKNOWN** = not yet determined.
@@ -21,8 +25,11 @@ with its own `main()` guarded by `if __name__ == "__main__":`.
 | `src/data/probe_vram.py` | Step 14 VRAM/throughput measurement | no | no | ✅ **yes — has run** (21/08/2026) |
 | `src/data/analyze_metadata.py` | Steps 3, 4, 6, 12 tables + figures | **yes** | no | ✅ **yes — has run on real data** (21/08) |
 | `src/data/make_splits.py` | Steps 5, 13, 15 splits + manifest | **yes** | no | ✅ **yes — has run on real data** (21/08) |
-| `src/data/validate_images.py` | Steps 8, 9 integrity + dimensions | yes | **yes** | ⛔ blocked on images |
-| `src/data/find_duplicates.py` | Step 7 duplicate analysis | yes | **yes** | ⛔ blocked on images |
+| `src/data/validate_images.py` | Steps 8, 9 integrity + dimensions | yes | **yes** | ✅ **yes — has run on real images** (30/08) |
+| `src/data/find_duplicates.py` | Step 7 duplicate analysis | yes | **yes** | ✅ **yes — has run on real images, including `--near`** (30/08) |
+| `src/training/train.py` | Stage 3 training entry point | **yes** | **yes** | ✅ **yes — has run on real images** (30–31/08) |
+| `src/training/eval_official_valid.py` | official-validation expert check | **yes** | **yes** | ✅ **yes — has run** (31/08) |
+| `src/training/test_training_smoke.py` | Stage 3 smoke suite | no | no | ✅ **yes — 64/64 checks pass** (31/08) |
 | `src/data/test_path_resolution.py` | path-resolution smoke test | no | no | ✅ **yes — passes** (21/08) |
 | `src/data/test_find_duplicates.py` | hash-failure regression test | no | no | ✅ **yes — 29 checks pass** (24/08) |
 
@@ -139,7 +146,7 @@ main()
 
 Constants: `GRANULARITY = 20`, `KEEP_COLS`.
 
-### 3.4 `validate_images.py` — ⛔ blocked on images (tested on fixture)
+### 3.4 `validate_images.py` — **CONFIRMED, has run on real images** (30/08/2026)
 
 ```text
 main()
@@ -158,7 +165,7 @@ main()
 error — **INFERRED significance:** Pillow's default silently pads a truncated JPEG with
 grey, which would train happily and never be detected.
 
-### 3.5 `find_duplicates.py` — ⛔ blocked on images (tested on fixture)
+### 3.5 `find_duplicates.py` — **CONFIRMED, has run on real images** (30/08/2026)
 
 ```text
 main()
@@ -279,7 +286,7 @@ The **code path is unchanged**; only configuration and inputs moved.
 |---|---|---|
 | `dataset.root` | `E:/UROP/data/raw/CheXpert-v1.0-small` | `E:/UROP` |
 | `dataset.train_csv` | `train.csv` | **`train_cheXbert.csv`** (D211) |
-| `valid.csv` | assumed present | **absent** — the warn-and-continue branch in `analyze_metadata.main()` is now the live path, not a hypothetical |
+| `valid.csv` | assumed present | **absent on 21/08** — the warn-and-continue branch in `analyze_metadata.main()` became the live path. **SUPERSEDED 30/08/2026:** `valid.csv` and the `valid/` image tree arrived with the image archive, and were used for the official-validation expert check on 31/08 |
 | `make_splits` mode | intended `official-test` | **`fallback-carved-test`** — `test_set.enabled: false` |
 
 **CONFIRMED resolved:** the real `Path` format, the `AP/PA` value set and the column list
@@ -317,3 +324,105 @@ prefix variants including Windows separators and the `valid/` split; correct res
 for a frontal AP, a frontal PA and a lateral image; and that the old naive join does *not*
 resolve. Additionally verified against real data: **all 98,265 split-CSV paths resolve,
 0 malformed.**
+
+---
+
+## 8. Stage 3 — training and evaluation (added 31/08/2026)
+
+**CONFIRMED — has run on real data.** `src/training/` did not exist when this document was
+first written; the original claim in the header that no training code exists is SUPERSEDED.
+
+### 8.1 Entry points
+
+| Entry point | Purpose | Status |
+|---|---|---|
+| `src/training/train.py` | training entry point; `--dry-run` fixture mode, `--resume`, optional `--eval-test` | has run on real images |
+| `src/training/eval_official_valid.py` | official-validation expert check | has run |
+| `src/training/test_training_smoke.py` | Stage 3 smoke suite | 64/64 checks pass |
+
+### 8.2 Modules
+
+| Module | Responsibility |
+|---|---|
+| `config.py` | loads/validates `train.yaml`; refuses unsupported architectures, a non-1 output head, `deterministic` + `cudnn_benchmark` together, and any augmentation section 11 forbids |
+| `dataset.py` | `CardiomegalyDataset` — reads a split CSV, re-derives `target` from the raw column and asserts it matches, resolves paths through the shared resolver, refuses to drop a missing image; `assert_no_patient_overlap` re-checks disjointness at train time |
+| `transforms.py` | `build_train_transform` / `build_eval_transform` — separate functions, so no flag can send augmentation to validation |
+| `models.py` | `build_from_config`, `check_output_shape`, `model_summary`; stamps `uro_meta` onto the model for checkpoint identity |
+| `losses.py` | `resolve_pos_weight` (cross-checks the manifest value against the train CSV), `build_loss` |
+| `metrics.py` | `select_threshold`, `binary_metrics`, `calibration`, `metrics_table`. **No confidence-interval estimator exists** |
+| `engine.py` | `train_one_epoch` (gradient accumulation + AMP), `predict`, `evaluate`, `fit` (early stopping, per-epoch checkpointing, `start_epoch` for resume) |
+| `checkpoint.py` | `save_checkpoint` (atomic), `load_checkpoint`, `capture_rng_state` / `restore_rng_state`, `CheckpointManager` |
+| `reproducibility.py` | `set_seed`, `seed_worker`, git SHA/dirty capture, run-directory convention, run manifest |
+
+### 8.3 Training flow
+
+```text
+train.py::main()
+  ├─ load_train_config → validate_train_config → load_data_config
+  ├─ set_seed(seed, deterministic=True)
+  ├─ load_split_manifest → build_datasets → assert_no_patient_overlap   ← HARD GATE
+  ├─ resolve_pos_weight   (manifest value cross-checked against train CSV)
+  ├─ build_from_config → check_output_shape   (synthetic forward pass, before any image)
+  ├─ make_run_dir → write run_manifest.json + config_snapshot.yaml
+  ├─ build_optimizer → build_scheduler → GradScaler → CheckpointManager
+  ├─ [--resume only] load_checkpoint → restore model/opt/sched/scaler
+  │                  → CheckpointManager.load_state → start_epoch = ckpt_epoch + 1
+  └─ fit(...)  per epoch: train_one_epoch → evaluate(val) → scheduler.step()
+                          → CheckpointManager.update → early-stopping check
+```
+
+Everything that can fail cheaply fails first: config validation, split loading,
+patient-disjointness, the `pos_weight` cross-check and a synthetic forward pass all run
+before the first real image is read.
+
+### 8.4 Resume — `--resume <checkpoint>`
+
+Explicit only; there is no auto-resume, because a silent resume is a silent methodology
+change. On resume the run:
+
+* restores model, optimizer, scheduler, AMP scaler, epoch counter and best-metric
+  bookkeeping;
+* reconstructs the early-stopping patience counter as `checkpoint_epoch - best_epoch`, so
+  patience cannot be reset by resuming;
+* starts at `checkpoint_epoch + 1` against the **unchanged** total epoch budget, and raises
+  if the budget is already spent;
+* reuses the **original run directory** and reads that run's own `config_snapshot.yaml`, so
+  a later config edit cannot drift the methodology;
+* refuses `--epochs`, `--seed`, `--model` and `--dry-run` alongside `--resume`;
+* refuses a `.tmp` checkpoint, a checkpoint outside `<run>/checkpoints/`, and any
+  checkpoint whose provenance seed, model or `pos_weight` disagrees with the live run;
+* preserves the resumed-from checkpoint as `pre_resume__*.pt` and writes resume provenance
+  under `<run>/resumes/`, leaving the original manifest and snapshot **byte-identical**.
+
+**Known gap:** the DataLoader shuffle generator is re-seeded from the run seed at process
+start and is **not** carried in checkpoints.
+
+**Known collision:** `save_checkpoint` derives its temporary path by appending `.tmp` to
+the destination, so a routine `last.pt` write targets `last.pt.tmp`. A stale
+`last.pt.tmp` from an interrupted run **cannot be preserved** across further training.
+
+### 8.5 Official-validation evaluation flow
+
+```text
+eval_official_valid.py::main()
+  ├─ resolve checkpoint → read that run's config_snapshot.yaml
+  ├─ build_official_frame:  attach_identifiers → select_frontal → apply_uncertainty_policy
+  │                         (the same functions make_splits.py uses)
+  ├─ write the derived frontal-only CSV INTO the evaluation directory (data/ is never written)
+  ├─ pre-flight: assert every referenced image resolves and exists
+  ├─ CardiomegalyDataset + build_eval_transform   (identical to the frozen splits)
+  ├─ build_from_config → load_checkpoint
+  └─ evaluate(threshold=<given>)  → refuses to report unless policy == "inherited"
+```
+
+The threshold is a **required argument**. There is no threshold-selection code path in this
+entry point, so the official validation set cannot be tuned on even by mistake.
+
+### 8.6 Verification performed
+
+| Check | Result |
+|---|---|
+| `test_training_smoke.py` | **64/64 pass** (31/08/2026) |
+| Resume verification — real checkpoint restored into fresh objects | **36/36 pass** — 932/932 model tensors bit-exact, optimizer moments and step counters exact, scheduler and AMP scaler restored |
+| Resume verification — end-to-end on a synthetic fixture | **24/24 pass** — run dir reused, original manifest and snapshot byte-identical, epoch numbering continues, guard rails refuse `--epochs`, `.tmp` and missing checkpoints |
+| Official-validation post-run checks | **19/19 pass** — 202 frontal evaluated, 32 laterals excluded, threshold policy `inherited`, confusion sums to 202 |

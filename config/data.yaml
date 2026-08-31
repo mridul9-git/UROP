@@ -19,7 +19,7 @@ dataset:
   # Official 200-patient expert-annotated validation metadata. NOT YET ACQUIRED —
   # neither downloaded CSV contains any validation rows (all 223,414 are train/).
   # analyze_metadata.py warns and continues; make_splits.py never reads it.
-  valid_csv: valid.csv
+  valid_csv: data/valid.csv
 
   # Optional ablation ONLY — never the primary target. VisualCheXbert predicts
   # image-derived rather than report-derived labels: 58.33% frontal prevalence vs
@@ -37,9 +37,9 @@ dataset:
 # NOT YET DOWNLOADED — every image-dependent script fails loudly until this exists.
 images:
   # Directory that CONTAINS the release directory (not the release directory itself).
-  root: E:/UROP/data/raw
+  root: E:/UROP
   # Name of the unpacked release directory inside images.root.
-  release_dir: CheXpert-v1.0-small
+  release_dir: data
   # Subdirectory that must exist inside release_dir for the layout check to pass.
   expect_subdir: train
 

@@ -11,9 +11,53 @@ local; only the manifest and metrics are ever committable.
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 
+import numpy as np
 import torch
+
+
+def capture_rng_state() -> dict:
+    """Snapshot every RNG stream set_seed() touches.
+
+    Without this a resumed run restarts the augmentation and shuffle streams
+    from the seed rather than continuing them, which is not the same run.
+    Checkpoints written before this existed simply have no `rng_state` key and
+    are still loadable - see load_checkpoint(restore_rng=...).
+    """
+    state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["torch_cuda_all"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def restore_rng_state(state: dict) -> list[str]:
+    """Restore what capture_rng_state() saved. Returns the streams restored."""
+    restored = []
+    if not state:
+        return restored
+    if "python" in state:
+        random.setstate(state["python"])
+        restored.append("python")
+    if "numpy" in state:
+        np.random.set_state(state["numpy"])
+        restored.append("numpy")
+    if "torch" in state:
+        torch.set_rng_state(state["torch"].cpu().to(torch.uint8))
+        restored.append("torch")
+    if "torch_cuda_all" in state and torch.cuda.is_available():
+        saved = state["torch_cuda_all"]
+        # Only restore when the device count matches; a mismatched restore
+        # would be silently wrong rather than loudly absent.
+        if len(saved) == torch.cuda.device_count():
+            torch.cuda.set_rng_state_all([t.cpu().to(torch.uint8) for t in saved])
+            restored.append("torch_cuda")
+    return restored
 
 
 def save_checkpoint(path: str | Path, *, model, optimizer=None, scheduler=None,
@@ -38,6 +82,7 @@ def save_checkpoint(path: str | Path, *, model, optimizer=None, scheduler=None,
         "best_epoch": best_epoch,
         "provenance": provenance or {},
         "model_meta": dict(getattr(model, "uro_meta", {})),
+        "rng_state": capture_rng_state(),
     }
     if extra:
         payload.update(extra)
@@ -49,7 +94,7 @@ def save_checkpoint(path: str | Path, *, model, optimizer=None, scheduler=None,
 
 
 def load_checkpoint(path: str | Path, *, model=None, optimizer=None,
-                    scheduler=None, scaler=None,
+                    scheduler=None, scaler=None, restore_rng: bool = False,
                     map_location: str = "cpu", strict: bool = True) -> dict:
     """Load a checkpoint, optionally restoring into live objects.
 
@@ -83,6 +128,13 @@ def load_checkpoint(path: str | Path, *, model=None, optimizer=None,
     if scaler is not None and payload.get("scaler_state"):
         scaler.load_state_dict(payload["scaler_state"])
 
+    # Reported, never assumed: a caller that asked for RNG restore and got
+    # nothing must be able to see that in the returned payload.
+    payload["rng_restored"] = (
+        restore_rng_state(payload.get("rng_state")) if restore_rng else []
+    )
+    payload["rng_state_present"] = bool(payload.get("rng_state"))
+
     return payload
 
 
@@ -109,6 +161,13 @@ class CheckpointManager:
     @property
     def last_path(self) -> Path:
         return self.dir / "last.pt"
+
+    def load_state(self, best_metric: float | None,
+                   best_epoch: int | None) -> None:
+        """Adopt a previous run's best-so-far, so a resume cannot re-crown a
+        worse epoch as 'best' and cannot reset early-stopping patience."""
+        self.best_metric = None if best_metric is None else float(best_metric)
+        self.best_epoch = None if best_epoch is None else int(best_epoch)
 
     def is_improvement(self, value: float, min_delta: float = 0.0) -> bool:
         if value is None:

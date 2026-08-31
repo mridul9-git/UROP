@@ -820,7 +820,7 @@ The actual repository structure should **not** be forced to match this before re
 
 # 16. Living Documentation System
 
-Claude must maintain the documentation alongside the implementation.
+Documentation must be maintained alongside the implementation.
 
 ## `flow.md`
 
@@ -865,7 +865,7 @@ The example above is illustrative only. `flow.md` must always reflect the **actu
 
 ## Documentation Rule
 
-Whenever Claude makes a meaningful code change:
+Whenever a meaningful code change is made:
 
 ```text
 CODE CHANGE
@@ -887,13 +887,20 @@ Documentation should distinguish between:
 - **INFERRED** — logically inferred but not directly confirmed.
 - **UNKNOWN** — not yet verified.
 
-Claude must not invent undocumented architecture.
+Undocumented architecture must not be invented.
 
 ---
 
 # 17. Experimental Scope
 
 ## Core Scope — Must Complete
+
+> **Reading note (added 31/08/2026).** The ticked boxes below mark items that are **in
+> scope and required**, not items that are finished. This is the original scope
+> definition and is retained unchanged as a historical document. For actual completion
+> status see `docs/experiments.md`; as of 31/08/2026 **one** of the four baseline
+> benchmarks (ResNet152) has been run, and every item from *Model comparison* onward is
+> **not started**.
 
 - [x] Literature review
 - [x] Dataset analysis
@@ -1044,7 +1051,7 @@ The goal is to produce a **reproducible, technically sound, experimentally justi
 
 > **Build less. Measure properly. Document everything. Understand the system.**
 
-Claude may generate the majority of implementation code, but every major component must be understood by the project owner through the living documentation and execution-flow analysis.
+Implementation may be produced rapidly, but every major component must be understood by the project owner through the living documentation and execution-flow analysis.
 
 The repository should remain understandable enough that the project owner can explain:
 
